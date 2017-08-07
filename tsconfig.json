@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "module": "amd",
+    "noImplicitAny": false,
+    "noEmitOnError": true,
+    "removeComments": false,
+    "target": "es5",
+    "outDir": "ael",
+    "moduleResolution": "classic",
+    "sourceMap": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "lib": [ "es2015", "dom", "scripthost" ],
+    "typeRoots": [ "./node_modules/@types" ] // had to set this otherwise the dojo typings don't work for some reason
+  },
+  "files": [
+    "typescript/animatedEnvironmentLayer.ts",
+    "typescript/pageSetup.ts"
+  ]
+}

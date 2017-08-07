@@ -1,0 +1,193 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <title>Animated Environment Layer</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
+
+    <style>
+        html, body {
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            font-family: abel, Arial, Calibri;
+            overflow: hidden;
+        }
+
+        #container, .view {
+            width: 100%;
+            height: 100%;
+            padding: 0;
+            margin: 0;
+            position: relative;
+        }
+
+            .view.hidden {
+                position: absolute;
+                z-index: -10;
+            }
+
+        /* top menu */
+        #top-menu {
+            -webkit-box-shadow: 2px 3px 22px 0px rgba(173, 173, 173, 0.75);
+            -moz-box-shadow: 2px 3px 22px 0px rgba(173, 173, 173, 0.75);
+            box-shadow: 2px 3px 22px 0px rgba(173, 173, 173, 0.75);
+            position: absolute;
+            left: 10px;
+            top: 10px;
+            padding: 0 10px;
+            height: 45px;
+            width: auto;
+            background: rgba(46, 68, 94, 0.8);
+            z-index: 2001;
+            color: #FFF;
+        }
+
+            #top-menu .section {
+                display: inline-block;
+                height: 100%;
+                padding: 0 5px;
+                padding-top: 10px;
+            }
+
+            #top-menu .separator {
+                height: 100%;
+                width: 3px;
+                border-right: 1px solid #d0d0d0;
+                padding: 0;
+            }
+
+            #top-menu .button {
+                display: inline-block;
+                height: 100%;
+                color: #FFF;
+                margin: 0 5px;
+                background: none;
+                border: none;
+                cursor: pointer;
+                width: 85px;
+                padding: 0;
+            }
+
+                #top-menu .button.active {
+                    font-weight: bold;
+                    background: rgba(0,0,0,0.1);
+                    border: 1px solid rgba(255,255,255,0.1);
+                }
+
+                #top-menu .button:focus {
+                    outline: none;
+                }
+
+                #top-menu .button:hover {
+                    opacity: 0.7;
+                    transition: opacity 0.4s;
+                }
+
+            #top-menu select {
+                font-size: 1em;
+                height: 60%;
+                font-family: abel, Arial;
+            }
+
+        #report-container {
+            position: absolute;
+            bottom: 20px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.6);
+            color: #fff;
+            padding: 5px 10px;
+        }
+
+        @media (min-width: 320px) and (max-width: 639px) {
+            #top-menu #title-text {
+                display: none;
+            }
+
+            #top-menu .button {
+                width: 75px;
+                margin: 0;
+            }
+        }
+    </style>
+
+    <link href="//fonts.googleapis.com/css?family=Abel" rel="stylesheet">
+    <link rel="stylesheet" href="https://js.arcgis.com/4.4/esri/css/main.css">
+
+    <script>
+        var dojoConfig = {
+            async: true,
+            tlmSiblingOfDojo: false,
+            packages: [{
+                name: "ael",
+                location: location.pathname.replace(/\/[^/]+$/, '') + "/ael"
+            }]
+        };
+    </script>
+
+    <script src="https://js.arcgis.com/4.4/"></script>
+
+    <script type="text/javascript">
+
+        require([
+            "ael/pageSetup",
+            "dojo/domReady!"
+        ], function (
+                pageSetup
+            ) {
+            var setup = new pageSetup.PageSetup();
+            setup.init();
+        });
+
+    </script>
+
+</head>
+<body>
+
+
+    <div id="container">
+
+        <div class="view" id="map-view">
+        </div>
+
+        <div class="view" id="scene-view">
+        </div>
+
+        <div id="top-menu">
+            <div class="section text">
+                <span id="title-text">Environment Layer - </span><span>API v4.4</span>
+            </div>
+
+            <span class="separator"></span>
+
+            <div class="section">
+                <select id="basemap-select">
+                    <option selected="selected">satellite</option>
+                    <option>dark-gray</option>
+                    <option>gray</option>
+                    <option>streets</option>
+                </select>
+            </div>
+
+            <div class="section">
+                <select id="data-select"></select>
+            </div>
+
+        </div>
+
+        <div id="report-container">
+            Direction:
+            <span id="direction"></span>
+            |
+            Speed:
+            <span id="speed"></span> m/s
+        </div>
+
+    </div>
+
+</body>
+</html>
