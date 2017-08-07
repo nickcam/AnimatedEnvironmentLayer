@@ -3,6 +3,8 @@
 An arcgis js api layer that can display data from GRIB2 files as animated particles.
 Uses a canvas to render the particles.
 
+Demo page here: [http://animatedenvironmentlayer.azurewebsites.net/index.html](http://animatedenvironmentlayer.azurewebsites.net/index.html)
+
 GRIB files are a common format for meteorologcical data. See here for more info: [https://en.wikipedia.org/wiki/GRIB](https://en.wikipedia.org/wiki/GRIB). 
 
 Things such as wind, currents, waves etc, can be modelled. There's just two wind data files used as test data included in the repo.
