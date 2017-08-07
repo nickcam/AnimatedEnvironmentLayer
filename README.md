@@ -5,9 +5,10 @@ Uses a canvas to render the particles.
 
 GRIB files are a common format for meteorologcical data. See here for more info: [https://en.wikipedia.org/wiki/GRIB](https://en.wikipedia.org/wiki/GRIB). 
 
+Things such as wind, currents, waves etc, can be modelled. There's just two wind data files used as test data included in the repo.
+
 The layer requires the GRIB files to be converted to json for use. This tool is used to do that conversion:
 [https://github.com/cambecc/grib2json](https://github.com/cambecc/grib2json)
-
 
 # Credit
 This is essentially just an arcgis and typescript port of this awesome project -
