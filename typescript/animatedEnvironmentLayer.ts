@@ -385,7 +385,6 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
 
         if (this._is2d() && this._windy) {
             this._windy.PARTICLE_MULTIPLIER = pm;
-            console.log(currentZoom + " - " + pm);
         }
 
     }
