@@ -10,7 +10,7 @@ import * as on from "dojo/on";
 import * as dom from "dojo/dom";
 import * as domClass from "dojo/dom-class";
 
-import { AnimatedEnvironmentLayer, DisplayOptions } from "./animatedEnvironmentLayer";
+import { AnimatedEnvironmentLayer, DisplayOptions, PointReport } from "./animatedEnvironmentLayer";
 
 interface DataOption {
     id: string;
@@ -64,9 +64,9 @@ export class PageSetup {
 
         // subscribe to the point-report event and display the values in UI.
         let windLayerAny: any = this.environmentLayer;
-        windLayerAny.on("point-report", (rpt) => {
-            dom.byId("direction").innerHTML = rpt.direction ? rpt.direction.toFixed(1) : "n/a";
-            dom.byId("speed").innerHTML = rpt.speed ? rpt.speed.toFixed(2) : "n/a";
+        windLayerAny.on("point-report", (rpt: PointReport) => {
+            dom.byId("direction").innerHTML = rpt.degree ? rpt.degree.toFixed(1) : "n/a";
+            dom.byId("speed").innerHTML = rpt.velocity ? rpt.velocity.toFixed(2) : "n/a";
         });
     }
 
@@ -88,12 +88,33 @@ export class PageSetup {
      */
     private _initDataOptions() {
 
-        //setup some data options
+        // setup some data options
         let globalWind: DataOption = {
             url: "./data/global-wind.json",
             id: "Global wind",
             displayOptions: {
-                maxVelocity: 15
+                maxVelocity: 15,
+                // make the particle multipliers change depending on zoom level
+                particleMultiplierByZoom: {
+                    diffRatio: 0.4,
+                    maxMultiplier: 5,
+                    minMultiplier: 0.2,
+                    particleMultiplier: 4,
+                    zoomLevel: 4
+                }
+            } 
+        };
+
+        // Make swell look different to wind
+        let ausSwell: DataOption = {
+            url: "./data/auswave_pop_flds_combined.json",
+            id: "Australian swell",
+            displayOptions: {
+                maxVelocity: 5,
+                lineWidth: 10,
+                particleAge: 30,
+                particleMultiplier: 1,
+                colorScale: ["#ffffff", "#e9ecfb", "#d3d9f7", "#bdc6f3", "#a7b3ef", "#91a0eb", "#7b8de7", "#657ae3", "#4f67df", "#3954db"]
             }
         };
 
@@ -103,13 +124,12 @@ export class PageSetup {
             id: "Global wind 2",
             displayOptions: {
                 maxVelocity: 15,
-                lineWidth: 8,
-                particleAge: 30,
-                particleMultiplier: 0.001
+                particleMultiplier: 3
             }
         };
 
         this._dataOptions.push(globalWind);
+        this._dataOptions.push(ausSwell);
         this._dataOptions.push(globalWind2);
 
         let select = dom.byId("data-select");

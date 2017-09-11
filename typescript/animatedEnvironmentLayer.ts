@@ -40,36 +40,64 @@ import * as query from "dojo/query";
 /** 
     The available display options to chaneg the particle rendering
 */
-export interface DisplayOptions { 
+export interface DisplayOptions {
     minVelocity?: number;
     maxVelocity?: number;
     velocityScale?: number;
     particleAge?: number;
     particleLineWidth?: number;
     particleMultiplier?: number;
+    particleMultiplierByZoom?: ParticleMultiplierByZoom,
     frameRate?: number;
     colorScale?: string[];
     lineWidth?: number;
 }
 
+
+/**
+    An simple object to define dynamic particle multipliers depending on current zoom level.
+    A basic attempt to cater for particles displaying too densely on close in zoom levels.
+*/
+export interface ParticleMultiplierByZoom {
+    // the base zoom level to start calculating at. Find a pariticle multipler at this zoom level that looks good for your data.
+    zoomLevel: number,
+
+    // The particle multiplier for the base zoom level specified above. Find a particle multipler at this zoom level that looks good for your data.
+    particleMultiplier: number,
+
+    // The amount to subtract or add to the particle multiplier depending on zoom level
+    diffRatio: number,
+
+    // the min value the multiplier can go
+    minMultiplier: number,
+
+    // the max value the multiplier can go
+    maxMultiplier: number
+}
+
+
 /**
  The return object from the point-report event
 */
-interface PointReport {
+export interface PointReport {
     point: Point;
-    direction?: number;
-    speed?: number;
+    target: AnimatedEnvironmentLayer;
+    degree?: number;
+    velocity?: number;
 }
 
-interface AnimatedEnvironmentLayerProperties extends __esri.GraphicsLayerProperties {
+export interface AnimatedEnvironmentLayerProperties extends __esri.GraphicsLayerProperties {
     activeView?: MapView | SceneView;
-    url: string;
+    url?: string;
     displayOptions?: DisplayOptions;
     reportValues?: boolean;
 }
 
 @asd.subclass("AnimatedEnvironmentLayer")
 export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
+
+    //add the Evented functions as properties so typescript is happy using it. There's probably better ways to include a mixin's properties?
+    emit: (eventName: string, event: any) => Function;
 
     @asd.property()
     url: string;
@@ -79,6 +107,9 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
 
     @asd.property()
     reportValues: boolean;
+
+    @asd.property()
+    dataLoading: boolean;
 
     private _windy: Windy;
     private _dataFetchRequired: boolean;
@@ -95,19 +126,28 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     private _activeView: MapView | SceneView;
     private _viewLoadCount: number = 0;
 
+    private _isDrawing: boolean = false;
+    private _queuedDraw: boolean;
+
+
+    date: Date;
+
     constructor(properties: AnimatedEnvironmentLayerProperties) {
         super(properties);
 
         // If the active view is set in properties, then set it here.
         this._activeView = properties.activeView;
         this.url = properties.url;
-        this.displayOptions = properties.displayOptions;
+        this.displayOptions = properties.displayOptions || {};
         this.reportValues = properties.reportValues === false ? false : true; // default to true
 
         this.on("layerview-create", (evt) => this._layerViewCreated(evt));
 
         // watch url prop so a fetch of data and redraw will occur.
         watchUtils.watch(this, "url", (a, b, c, d) => this._urlChanged(a, b, c, d));
+
+        // watch url prop so a fetch of data and redraw will occur.
+        watchUtils.watch(this, "visible", (a, b, c, d) => this._visibleChanged(a, b, c, d));
 
         // watch display options so to redraw when changed.
         watchUtils.watch(this, "displayOptions", (a, b, c, d) => this._displayOptionsChanged(a, b, c, d));
@@ -117,27 +157,39 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     /**
      * Start a draw
      */
-    draw() {
+    draw(forceDataRefetch?: boolean) {
 
+        if (forceDataRefetch != null) {
+            this._dataFetchRequired = forceDataRefetch;
+        }
+
+        if (!this.url || !this.visible) return; // no url set, not visible or is currently drawing, exit here.
+
+        this._isDrawing = true;
         this._setupDraw(this._activeView.width, this._activeView.height);
 
         // if data should be fetched, go get it now.
         if (this._dataFetchRequired) {
+
+            this.dataLoading = true;
             esriRequest(this.url, {
                 responseType: "json"
             })
-            .then((response) => {
-                this._dataFetchRequired = false;
-                this._windy.setData(response.data)
-                this._doDraw(); // all sorted draw now.
-            })
-            .otherwise((err) => {
-                console.error("Error occurred retrieving data. " + err);
-            });
+                .then((response) => {
+                    this._dataFetchRequired = false;
+                    this._windy.setData(response.data)
+                    this._doDraw(); // all sorted draw now.
+                    this.dataLoading = false;
+                })
+                .otherwise((err) => {
+                    console.error("Error occurred retrieving data. " + err);
+                    this.dataLoading = false;
+                });
         }
         else {
             // no need for data, just draw.
             this._doDraw();
+
         }
     }
 
@@ -149,6 +201,17 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
         this._activeView = view;
         this.draw();
     }
+
+    stop() {
+        if (this._windy) {
+            this._windy.stop();
+        }
+    }
+
+    start() {
+        this.draw();
+    }
+
 
     /**
      * Is the active view 2d.
@@ -169,6 +232,16 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
                     this._canvas2d.height,
                     [[this._southWest.x, this._southWest.y], [this._northEast.x, this._northEast.y]]
                 );
+
+                this._setDate();
+
+                this._isDrawing = false;
+
+                // if we have a queued draw do it right now.
+                if (this._queuedDraw) {
+                    this._queuedDraw = false;
+                    this.draw();
+                }
             }
         }, 500);
     }
@@ -263,6 +336,7 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
         this._initWindy();
     }
 
+
     /**
      * view stationary handler, clear canvas or force a redraw
      */
@@ -278,12 +352,46 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
             }
         }
         else {
-            this.draw();
+            if (this._isDrawing) {
+                this._queuedDraw = true;
+            }
+            else {
+
+                if (this.displayOptions.particleMultiplierByZoom) {
+                    this._setParticleMultiplier();
+                }
+
+                this.draw();
+            }
         }
     }
 
+    private _setParticleMultiplier() {
+        let currentZoom = this._activeView.zoom;
+        let baseZoom = this.displayOptions.particleMultiplierByZoom.zoomLevel;
+        let pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier;
+
+        if (currentZoom > baseZoom) {
+            let zoomDiff = (currentZoom - baseZoom);
+            pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier - (zoomDiff * this.displayOptions.particleMultiplierByZoom.diffRatio);
+        }
+        else if (currentZoom < baseZoom) {
+            let zoomDiff = baseZoom - currentZoom;
+            pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier + (zoomDiff * this.displayOptions.particleMultiplierByZoom.diffRatio);
+        }
+
+        if (pm < this.displayOptions.particleMultiplierByZoom.minMultiplier) pm = this.displayOptions.particleMultiplierByZoom.minMultiplier;
+        else if (pm > this.displayOptions.particleMultiplierByZoom.maxMultiplier) pm = this.displayOptions.particleMultiplierByZoom.maxMultiplier;
+
+        if (this._is2d() && this._windy) {
+            this._windy.PARTICLE_MULTIPLIER = pm;
+            console.log(currentZoom + " - " + pm);
+        }
+
+    }
+
     private _viewPointerMove(evt) {
-        if (!this._windy) return;
+        if (!this._windy || !this.visible) return;
 
         let mousePos = this._getMousePos(evt);
         let point = this._activeView.toMap({ x: mousePos.x, y: mousePos.y });
@@ -293,19 +401,21 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
 
         let grid = this._windy.interpolate(point.x, point.y);
         let result: PointReport = {
-            point: point
+            point: point,
+            target: this
         };
 
         if (!grid || (isNaN(grid[0]) || isNaN(grid[1]) || !grid[2])) {
-            // the current point contains no data in the windy grid, so emit an undefined object
-            this["emit"]("point-report", result);
+            // the current point contains no data in the windy grid, so emit an object with no speed or direction object
+            this.emit("point-report", result);
             return;
         }
 
         // get the speed and direction and emit the result
-        result.speed = this._vectorToSpeed(grid[0], grid[1]);
-        result.direction = this._vectorToDegrees(grid[0], grid[1]);
-        this["emit"]("point-report", result);
+        result.velocity = this._vectorToSpeed(grid[0], grid[1]);
+        result.degree = this._vectorToDegrees(grid[0], grid[1]);
+        this.emit("point-report", result);
+
     }
 
     /**
@@ -319,7 +429,7 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     }
 
     /**
-     * Return the windy vector data as a direction. Returns the direction in the flow of the data in wth the degrees in a clockwise direction.
+     * Return the windy vector data as a direction. Returns the direction of the flow of the data with the degrees in a clockwise direction.
      * @param uMs
      * @param vMs
      */
@@ -357,6 +467,19 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     }
 
     /**
+     * Watch of the url property - call draw again with a refetch
+     */
+    private _visibleChanged(visible, b, c, d) {
+        if (!visible) {
+            if (this._windy) this._windy.stop();
+        }
+        else {
+            this.draw();
+        }
+
+    }
+
+    /**
      * Watch of displayOptions - call draw again with new options set on windy.
      */
     private _displayOptionsChanged(newOptions, b, c, d) {
@@ -365,18 +488,34 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
         this._windy.setDisplayOptions(newOptions);
         this.draw();
     }
+
+    private _setDate() {
+        if (this._is2d() && this._windy) {
+            if (this._windy.refTime && this._windy.forecastTime) {
+
+                // assume the ref time is an iso string, or some other equivalent that javascript Date object can parse.
+                let d = new Date(this._windy.refTime);
+
+                // add the forecast time as hours to the refTime;
+                d.setHours(d.getHours() + this._windy.forecastTime);
+                this.date = d;
+                return;
+            }
+        }
+
+        this.date = undefined;
+    }
 }
 
 
 
-/*  Global class for simulating the movement of particle through a 1km wind grid
+/*  Global class for simulating the movement of particle through grid
  credit: All the credit for this work goes to: https://github.com/cambecc for creating the repo:
- https://github.com/cambecc/earth. The majority of this code is directly take nfrom there, since its awesome.
+ https://github.com/cambecc/earth. The majority of this code is directly taken from there, since its awesome.
  This class takes a canvas element and an array of data (1km GFS from http://www.emc.ncep.noaa.gov/index.php?branch=GFS)
  and then uses a mercator (forward/reverse) projection to correctly map wind vectors in "map space".
  The "start" method takes the bounds of the map at its current extent and starts the whole gridding,
  interpolation and animation process.
-
  Extra credit to https://github.com/danwild/leaflet-velocity for modifying the class to be more customizable and reusable for other scenarios.
  Also credit to - https://github.com/Esri/wind-js 
  */
@@ -394,6 +533,9 @@ class Windy {
     colorScale: any;
     canvas: HTMLCanvasElement;
 
+    forecastTime: number;
+    refTime: string;
+
     NULL_WIND_VECTOR = [NaN, NaN, null]; // singleton for no wind in the form: [u, v, magnitude]
 
     static field: any;
@@ -409,6 +551,9 @@ class Windy {
     Δφ;
     ni;
     nj;
+
+    private _scanMode: number;
+    private _dynamicParticleMultiplier: boolean;
 
     constructor(canvas: HTMLCanvasElement, data?: any, options?: DisplayOptions) {
 
@@ -429,12 +574,15 @@ class Windy {
         this.VELOCITY_SCALE = (options.velocityScale || 0.005) * (Math.pow(window.devicePixelRatio, 1 / 3) || 1); // scale for wind velocity (completely arbitrary--this value looks nice)
         this.MAX_PARTICLE_AGE = options.particleAge || 90; // max number of frames a particle is drawn before regeneration
         this.PARTICLE_LINE_WIDTH = options.lineWidth || 1; // line width of a drawn particle
-        this.PARTICLE_MULTIPLIER = options.particleMultiplier || 1 / 300; // particle count scalar (completely arbitrary--this values looks nice)
+
+        // default particle multiplier to 2
+        this.PARTICLE_MULTIPLIER = options.particleMultiplier || 2;
+
         this.PARTICLE_REDUCTION = Math.pow(window.devicePixelRatio, 1 / 3) || 1.6; // multiply particle count for mobiles by this amount
         this.FRAME_RATE = options.frameRate || 15;
         this.FRAME_TIME = 1000 / this.FRAME_RATE; // desired frames per second
 
-        var defaultColorScale = ["rgb(36,104, 180)", "rgb(60,157, 194)", "rgb(128,205,193 )", "rgb(151,218,168)", "rgb(198,231,181)", "rgb(238,247,217)", "rgb(255,238,159)", "rgb(252,217,125)", "rgb(255,182,100)", "rgb(252,150,75)", "rgb(250,112,52)", "rgb(245,64,32)", "rgb(237,45,28)", "rgb(220,24,32)", "rgb(180,0,35)"];
+        var defaultColorScale = ["rgb(61,160,247)", "rgb(99,164,217)", "rgb(138,168,188)", "rgb(177,173,158)", "rgb(216,177,129)", "rgb(255,182,100)", "rgb(240,145,87)", "rgb(225,109,74)", "rgb(210,72,61)", "rgb(195,36,48)", "rgb(180,0,35)"];
         this.colorScale = options.colorScale || defaultColorScale;
     }
 
@@ -480,6 +628,13 @@ class Windy {
         let i = this.floorMod(λ - this.λ0, 360) / this.Δλ; // calculate longitude index in wrapped range [0, 360)
         let j = (this.φ0 - φ) / this.Δφ; // calculate latitude index in direction +90 to -90
 
+        if (this._scanMode === 64) {
+            // calculate latitude index in direction -90 to +90 as this is scan mode 64
+            j = (φ - this.φ0) / this.Δφ;
+            j = this.grid.length - j;
+        }
+
+
         let fi = Math.floor(i),
             ci = fi + 1;
         let fj = Math.floor(j),
@@ -518,22 +673,41 @@ class Windy {
         this.date = new Date(header.refTime);
         this.date.setHours(this.date.getHours() + header.forecastTime);
 
-        // Scan mode 0 assumed. Longitude increases from λ0, and latitude decreases from φ0.
-        // http://www.nco.ncep.noaa.gov/pmb/docs/grib2/grib2_table3-4.shtml
+        this._scanMode = header.scanMode;
+
         this.grid = [];
         var p = 0;
         var isContinuous = Math.floor(this.ni * this.Δλ) >= 360;
 
-        for (var j = 0; j < this.nj; j++) {
-            var row = [];
-            for (var i = 0; i < this.ni; i++ , p++) {
-                row[i] = this.builder.data(p);
+        if (header.scanMode === 0) {
+            // Scan mode 0. Longitude increases from λ0, and latitude decreases from φ0.
+            // http://www.nco.ncep.noaa.gov/pmb/docs/grib2/grib2_table3-4.shtml
+
+            for (let j = 0; j < this.nj; j++) {
+                let row = [];
+                for (let i = 0; i < this.ni; i++ , p++) {
+                    row[i] = this.builder.data(p);
+                }
+                if (isContinuous) {
+                    // For wrapped grids, duplicate first column as last column to simplify interpolation logic
+                    row.push(row[0]);
+                }
+                this.grid[j] = row;
             }
-            if (isContinuous) {
-                // For wrapped grids, duplicate first column as last column to simplify interpolation logic
-                row.push(row[0]);
+        }
+        else if (header.scanMode === 64) {
+            // Scan mode 0. Longitude increases from λ0, and latitude increases from φ0.
+            for (let j = this.nj - 1; j >= 0; j--) {
+                let row = [];
+                for (let i = 0; i < this.ni; i++ , p++) {
+                    row[i] = this.builder.data(p);
+                }
+                if (isContinuous) {
+                    // For wrapped grids, duplicate first column as last column to simplify interpolation logic
+                    row.push(row[0]);
+                }
+                this.grid[j] = row;
             }
-            this.grid[j] = row;
         }
 
         callback({
@@ -545,22 +719,79 @@ class Windy {
     private createBuilder(data) {
         let uComp = null,
             vComp = null,
-            scalar = null;
+            scalar = null,
+            directionTrue = null,
+            magnitude = null;
+
+        let supported = true;
+        let headerFields;
 
         data.forEach((record) => {
-            switch (record.header.parameterCategory + "," + record.header.parameterNumber) {
-                case "1,2":
-                case "2,2":
-                    uComp = record;
+            headerFields = `${record.header.discipline},${record.header.parameterCategory},${record.header.parameterNumber}`;
+            switch (headerFields) {
+                case "0,1,2":
+                case "0,2,2":
+                    uComp = record; // this is meteorological component with u and v.
                     break;
-                case "1,3":
-                case "2,3":
-                    vComp = record;
+                case "0,1,3":
+                case "0,2,3":
+                    vComp = record; // this is meteorological component with u and v.
+                    break;
+                case "10,0,7":
+                case "10,0,10":
+                case "0,2,0":
+                    directionTrue = record; //waves and wind direction
+                    break;
+                case "10,0,8":
+                case "10,0,3":
+                case "0,2,1":
+                    magnitude = record; //waves and wind height
                     break;
                 default:
-                    scalar = record;
+                    supported = false;
+                    return;
             }
+
+            // just take the last records reftime and forecast time as the one we're using
+            this.refTime = record.header.refTime;
+            this.forecastTime = record.header.forecastTime;
         });
+
+        if (!supported) {
+            console.error("Windy doesn't support discipline, category and number combination. " + headerFields);
+            return undefined;
+        }
+
+
+        if (directionTrue && magnitude) {
+            // If data contains a direction and magnitude convert it to a u and v.
+            uComp = {};
+            uComp.header = directionTrue.header;
+            vComp = {};
+            vComp.header = directionTrue.header;
+            uComp.data = [];
+            vComp.data = [];
+            for (let i = 0, len = directionTrue.data.length; i < len; i++) {
+
+                let dir = directionTrue.data[i];
+                let mag = magnitude.data[i];
+
+                if ((!dir || isNaN(dir)) || (!mag || isNaN(mag))) {
+                    vComp[i] = null;
+                    uComp[i] = null;
+                    continue;
+                }
+
+                let phi = dir * Math.PI / 180;
+                let u = -mag * Math.sin(phi);
+                let v = -mag * Math.cos(phi);
+
+                uComp.data[i] = u;
+                vComp.data[i] = v;
+
+            }
+        }
+
 
         return this.createWindBuilder(uComp, vComp);
     }
@@ -569,7 +800,7 @@ class Windy {
         let uData = uComp.data,
             vData = vComp.data;
         return {
-            header: uComp.header,            
+            header: uComp.header,
             data: function data(i) {
                 return [uData[i], vData[i]];
             },
@@ -581,7 +812,7 @@ class Windy {
     private buildBounds(bounds, width, height) {
         let upperLeft = bounds[0];
         let lowerRight = bounds[1];
-        let x = Math.round(upperLeft[0]); 
+        let x = Math.round(upperLeft[0]);
         let y = Math.max(Math.floor(upperLeft[1]), 0);
         let xMax = Math.min(Math.ceil(lowerRight[0]), width - 1);
         let yMax = Math.min(Math.ceil(lowerRight[1]), height - 1);
@@ -793,7 +1024,7 @@ class Windy {
             return [];
         });
 
-        let particleCount = Math.round(bounds.width * bounds.height * this.PARTICLE_MULTIPLIER);
+        let particleCount = Math.round(bounds.width * bounds.height * this.PARTICLE_MULTIPLIER / 1000);
         if (this.isMobile()) {
             particleCount *= this.PARTICLE_REDUCTION;
         }
