@@ -108,6 +108,9 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     @asd.property()
     dataLoading: boolean;
 
+    @asd.property()
+    isErrored: boolean;
+
     private _windy: Windy;
     private _dataFetchRequired: boolean;
 
@@ -167,21 +170,23 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
 
         // if data should be fetched, go get it now.
         if (this._dataFetchRequired) {
-
+            this.isErrored = false;
             this.dataLoading = true;
+
             esriRequest(this.url, {
                 responseType: "json"
             })
-                .then((response) => {
-                    this._dataFetchRequired = false;
-                    this._windy.setData(response.data)
-                    this._doDraw(); // all sorted draw now.
-                    this.dataLoading = false;
-                })
-                .otherwise((err) => {
-                    console.error("Error occurred retrieving data. " + err);
-                    this.dataLoading = false;
-                });
+            .then((response) => {
+                this._dataFetchRequired = false;
+                this._windy.setData(response.data)
+                this._doDraw(); // all sorted draw now.
+                this.dataLoading = false;
+            })
+            .otherwise((err) => {
+                console.error("Error occurred retrieving data. " + err);
+                this.dataLoading = false;
+                this.isErrored = true;
+            });
         }
         else {
             // no need for data, just draw.
