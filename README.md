@@ -7,7 +7,14 @@ Demo page here: [http://animatedenvironmentlayer.azurewebsites.net/index.html](h
 
 GRIB files are a common format for meteorologcical data. See here for more info: [https://en.wikipedia.org/wiki/GRIB](https://en.wikipedia.org/wiki/GRIB). 
 
-Things such as wind, currents, waves etc, can be modelled. There's just two wind data files used as test data included in the repo.
+Things such as wind, currents, waves etc can be modelled, anything with a velocity and direction. There's two wind files and one wave file used as test data included in the repo.
+
+You can use grib files that contain a direction and velocity set of data. Standard use is wind data that has u and v components, but you can use a number of different grib types as long as one is direction and one is velocity and it will convert them to u and v datasets. See the swell dataset for an example of this.
+
+Supports scan mode 0 and 64.
+
+Can change the particle density based on current map zoom dynamically. Using one particle mutiplier value can make the animation quite dense when you zoom in close, so use the dynamic particleMultiplier parameter to cater for this.
+
 
 The layer requires the GRIB files to be converted to json for use. This tool is used to do that conversion:
 [https://github.com/cambecc/grib2json](https://github.com/cambecc/grib2json)
