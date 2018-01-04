@@ -116,10 +116,14 @@
     </style>
 
     <link href="//fonts.googleapis.com/css?family=Abel" rel="stylesheet">
-    <link rel="stylesheet" href="https://js.arcgis.com/4.4/esri/css/main.css">
+    <link rel="stylesheet" href="https://js.arcgis.com/4.6/esri/css/main.css">
 
     <script>
         var dojoConfig = {
+            has: {
+                "esri-promise-compatibility": 1, // enable native promises and remove the warning about using when() instead of then(). https://developers.arcgis.com/javascript/latest/guide/release-notes/index.html#improved-compatibility-with-javascript-promises
+                "esri-featurelayer-webgl": 1
+            },
             async: true,
             tlmSiblingOfDojo: false,
             packages: [{
@@ -129,7 +133,7 @@
         };
     </script>
 
-    <script src="https://js.arcgis.com/4.4/"></script>
+    <script src="https://js.arcgis.com/4.6/"></script>
 
     <script type="text/javascript">
 

@@ -40,7 +40,7 @@ export class PageSetup {
             basemap: satellite
         });
 
-        this.mapView = new MapView({
+        this.mapView = new MapView({ 
             container: "map-view",
             center: new Point({ x: 134, y: -24, spatialReference: new SpatialReference({ wkid: 4326 }) }),
             zoom: 4,

@@ -96,9 +96,6 @@ export interface AnimatedEnvironmentLayerProperties extends __esri.GraphicsLayer
 @asd.subclass("AnimatedEnvironmentLayer")
 export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
 
-    //add the Evented functions as properties so typescript is happy using it. There's probably better ways to include a mixin's properties?
-    emit: (eventName: string, event: any) => Function;
-
     @asd.property()
     url: string;
 
@@ -695,7 +692,7 @@ class Windy {
             }
         }
         else if (header.scanMode === 64) {
-            // Scan mode 0. Longitude increases from λ0, and latitude increases from φ0.
+            // Scan mode 64. Longitude increases from λ0, and latitude increases from φ0.
             for (let j = this.nj - 1; j >= 0; j--) {
                 let row = [];
                 for (let i = 0; i < this.ni; i++ , p++) {
@@ -741,9 +738,9 @@ class Windy {
                 case "0,2,0":
                     directionTrue = record; //waves and wind direction
                     break;
-                case "10,0,8":
+                case "10,0,8": 
                 case "10,0,3":
-                case "0,2,1":
+                case "0,2,1": 
                     magnitude = record; //waves and wind height
                     break;
                 default:
