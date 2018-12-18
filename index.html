@@ -120,15 +120,11 @@
 
     <script>
         var dojoConfig = {
-            has: {
-                "esri-promise-compatibility": 1, // enable native promises and remove the warning about using when() instead of then(). https://developers.arcgis.com/javascript/latest/guide/release-notes/index.html#improved-compatibility-with-javascript-promises
-                "esri-featurelayer-webgl": 1
-            },
             async: true,
             tlmSiblingOfDojo: false,
             packages: [{
                 name: "ael",
-                location: location.pathname.replace(/\/[^/]+$/, '') + "/ael"
+                location: "/ael"
             }]
         };
     </script>

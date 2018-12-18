@@ -11,7 +11,7 @@ import * as dom from "dojo/dom";
 import * as domClass from "dojo/dom-class";
 
 import { AnimatedEnvironmentLayer, DisplayOptions, PointReport } from "./animatedEnvironmentLayer";
-
+ 
 interface DataOption {
     id: string;
     url: string;

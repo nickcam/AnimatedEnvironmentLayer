@@ -20,7 +20,7 @@ The layer requires the GRIB files to be converted to json for use. This tool is 
 [https://github.com/cambecc/grib2json](https://github.com/cambecc/grib2json)
 
 # Credit
-This is essentially just an arcgis and typescript port of this awesome project -
+This is essentially an arcgis and typescript port of this awesome project -
 
 [https://github.com/danwild/leaflet-velocity](https://github.com/danwild/leaflet-velocity), so check that out.
 
@@ -36,7 +36,7 @@ That project takes inspiration from the following two projects which are well wo
 
 # Usage
 
-If you want to run the repo locally, just do an npm install
+If you want to run the repo locally, just do an npm install and npm start. The reload server will run spin up the app and watch for file changes to trigger recompilation.
 
 There's no @types package for dojo v11.x yet, but there is an npm package 'dojo-typings'. Even the dojo-typings package doesn't go as high as 1.12.x which arcgis now uses. Had to just include a reference to the dojo types in a custom index.d.ts file.
 
