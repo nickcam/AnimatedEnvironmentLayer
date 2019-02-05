@@ -27,7 +27,6 @@
 import * as MapView from "esri/views/MapView";
 import * as SceneView from "esri/views/SceneView";
 import * as GraphicsLayer from "esri/layers/GraphicsLayer";
-import * as promiseUtils from "esri/core/promiseUtils";
 import * as esriRequest from "esri/request";
 import * as Extent from "esri/geometry/Extent";
 import * as webMercatorUtils from "esri/geometry/support/webMercatorUtils";
@@ -35,7 +34,11 @@ import * as watchUtils from "esri/core/watchUtils";
 import * as SpatialReference from "esri/geometry/SpatialReference";
 import * as Point from "esri/geometry/Point";
 import * as asd from "esri/core/accessorSupport/decorators";
-import * as query from "dojo/query";
+
+
+import BaseLayerView2D = require("esri/views/2d/layers/BaseLayerView2D");
+
+//export type DrawType = "line" | "circle" | "custom";
 
 /** 
     The available display options to chaneg the particle rendering
@@ -51,6 +54,15 @@ export interface DisplayOptions {
     frameRate?: number;
     colorScale?: string[];
     lineWidth?: number;
+
+
+    /** Whether to fade out the drawn item over a few frames. If false it will clear and redraw every frame, if true a trail will be created behind the movement of the particle.
+    * default: true */
+    applyFadeTrail?: boolean;
+
+    /** The type of draw object to use for the particle. Can be 'line', 'circle' or custom. Other properties to describe the drawing must be set depending on what is set here. */
+    //drawType: DrawType;
+
 }
 
 
@@ -93,6 +105,212 @@ export interface AnimatedEnvironmentLayerProperties extends __esri.GraphicsLayer
     reportValues?: boolean;
 }
 
+
+class AnimatedEnvironmentLayerView2D extends BaseLayerView2D {
+
+    layer: AnimatedEnvironmentLayer;
+    private viewState: __esri.ViewState;
+    private context: CanvasRenderingContext2D;
+
+    private drawing: boolean;
+    private drawPrepping: boolean;
+    private drawReady: boolean;
+
+    private animationLoopHandle?: number;
+
+    private southWest: Point;
+    private northEast: Point;
+
+    private frameTime: number;
+    windy: Windy;
+
+    private date: Date;
+
+    constructor(props) {
+        super();
+        this.view = props.view;
+        this.layer = <AnimatedEnvironmentLayer>props.layer;
+
+        this.view.on("resize", () => {
+            if (!this.context) return;
+
+            // resize the canvas
+            this.context.canvas.width = this.view.width;
+            this.context.canvas.height = this.view.height;
+        });
+
+
+        watchUtils.watch(this.layer, "visible", (nv, olv, pn, ta) => {
+            if (!nv) {
+                this.clear();
+            }
+            else {
+                this.prepDraw();
+            }
+        });
+
+    }
+
+
+    render(renderParameters) {
+
+        this.viewState = renderParameters.state;
+
+        if (!renderParameters.stationary) {
+            // not stationary so clear if drawn and set to prep again
+            if (this.drawing) {
+                this.clear();
+                this.drawing = false;
+            }
+            this.drawPrepping = false;
+            this.drawReady = false;
+            return;
+        }
+
+        if (!this.drawPrepping && !this.drawReady) { 
+            // prep the draw
+            this.drawPrepping = true;
+            if (this.windy.gridData) {
+                this.prepDraw();
+            }
+            return;
+        }
+
+        if (this.drawReady) {
+
+            if (!this.drawing) {
+                // this.animationLoop(); // haven't started drawing so kick off our animation loop
+                this.startWindy();
+            }
+
+            // draw the custom context into this layers context
+            renderParameters.context.drawImage(this.context.canvas, 0, 0);
+            this.drawing = true;
+
+            // call request render so we copy the draw again
+            this.requestRender();
+        }
+    }
+
+    private startWindy() {
+
+        setTimeout(() => {
+
+            this.windy.start(
+                [[0, 0], [this.context.canvas.width, this.context.canvas.height]],
+                this.context.canvas.width,
+                this.context.canvas.height,
+                [[this.southWest.x, this.southWest.y], [this.northEast.x, this.northEast.y]]
+            );
+
+            this.setDate();
+
+        }, 500);
+
+    }
+
+    attach() {
+
+        // use attach to initilaize a custom canvas to draw on
+        // create the canvas, set some properties. 
+        let canvas = document.createElement("canvas");
+        canvas.id = "ael-" + Date.now();
+        canvas.style.position = "absolute";
+        canvas.style.top = "0";
+        canvas.style.left = "0";
+        canvas.width = this.view.width;
+        canvas.height = this.view.height;
+        let context = canvas.getContext("2d");
+        this.context = context;
+
+        this.initWindy();
+    }
+
+    /**
+     * Init the windy class 
+     * @param data
+     */
+    private initWindy(data?) {
+        this.windy = new Windy(
+            this.context.canvas,
+            this.layer.displayOptions,
+            undefined
+            );
+    }
+
+
+    clear(stopDraw: boolean = true) {
+
+        if (stopDraw) {
+            this.stopDraw();
+        }
+
+        if (this.context) {
+            this.context.clearRect(0, 0, this.view.width, this.view.height);
+        }
+    }
+
+    stopDraw() {
+        this.windy.stop();
+        this.drawing = false;
+    }
+
+
+    prepDraw(data?: any) {
+
+        if (data) this.windy.setData(data);
+
+        this.startDraw();
+        this.drawPrepping = false;
+        this.drawReady = true;
+        this.requestRender();
+    }
+     
+
+    private startDraw() {
+
+        // use the extent of the view, and not the extent passed into fetchImage...it was slightly off when it crossed IDL.
+        let extent = this.view.extent;
+        if (extent.spatialReference.isWebMercator) {
+            extent = <Extent>webMercatorUtils.webMercatorToGeographic(extent);
+        }
+
+        this.northEast = new Point({ x: extent.xmax, y: extent.ymax });
+        this.southWest = new Point({ x: extent.xmin, y: extent.ymin });
+
+        // resize the canvas
+        this.context.canvas.width = this.view.width;
+        this.context.canvas.height = this.view.height;
+
+        // cater for the extent crossing the IDL
+        if (this.southWest.x > this.northEast.x && this.northEast.x < 0) {
+            this.northEast.x = 360 + this.northEast.x;
+        }
+
+    }
+
+    private setDate() {
+        if (this.windy) {
+            if (this.windy.refTime && this.windy.forecastTime) {
+
+                // assume the ref time is an iso string, or some other equivalent that javascript Date object can parse.
+                let d = new Date(this.windy.refTime);
+
+                // add the forecast time as hours to the refTime;
+                d.setHours(d.getHours() + this.windy.forecastTime);
+                this.date = d;
+                return;
+            }
+        }
+
+        this.date = undefined;
+    }
+
+}
+
+
+
+
 @asd.subclass("AnimatedEnvironmentLayer")
 export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
 
@@ -111,37 +329,17 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     @asd.property()
     isErrored: boolean;
 
-    private _windy: Windy;
-    private _dataFetchRequired: boolean;
-
-    private _canvas2d: HTMLCanvasElement;
-    private _canvas3d: HTMLCanvasElement;
-
-    private _layerView2d: any;
-    private _layerView3d: any;
-
-    private _southWest: Point;
-    private _northEast: Point;
-
-    private _activeView: MapView | SceneView;
-    private _viewLoadCount: number = 0;
-
-    private _isDrawing: boolean = false;
-    private _queuedDraw: boolean;
-
-
-    date: Date;
+    private dataFetchRequired: boolean;
+    layerView: AnimatedEnvironmentLayerView2D;
 
     constructor(properties: AnimatedEnvironmentLayerProperties) {
         super(properties);
 
         // If the active view is set in properties, then set it here.
-        this._activeView = properties.activeView;
         this.url = properties.url;
-        this.displayOptions = properties.displayOptions || {};
+        this.displayOptions = properties.displayOptions || {  };
         this.reportValues = properties.reportValues === false ? false : true; // default to true
 
-        this.on("layerview-create", (evt) => this._layerViewCreated(evt));
 
         // watch url prop so a fetch of data and redraw will occur.
         watchUtils.watch(this, "url", (a, b, c, d) => this._urlChanged(a, b, c, d));
@@ -151,7 +349,24 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
 
         // watch display options so to redraw when changed.
         watchUtils.watch(this, "displayOptions", (a, b, c, d) => this._displayOptionsChanged(a, b, c, d));
-        this._dataFetchRequired = true;
+        this.dataFetchRequired = true;
+    }
+
+
+    private createLayerView(view: __esri.MapView | __esri.SceneView) {
+
+        // only supports 2d right now.
+        if (view.type !== "2d") return;
+
+        // hook up the AnimatedEnvironmentLayerView2D as the layer view
+        this.layerView = new AnimatedEnvironmentLayerView2D({
+            view: view,
+            layer: this
+        });
+
+        this.layerView.view.on("pointer-move", (evt) => this.viewPointerMove(evt));
+        this.draw(true);
+        return this.layerView;
     }
 
     /**
@@ -160,216 +375,58 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     draw(forceDataRefetch?: boolean) {
 
         if (forceDataRefetch != null) {
-            this._dataFetchRequired = forceDataRefetch;
+            this.dataFetchRequired = forceDataRefetch;
         }
 
         if (!this.url || !this.visible) return; // no url set, not visible or is currently drawing, exit here.
 
-        this._isDrawing = true;
-        this._setupDraw(this._activeView.width, this._activeView.height);
-
         // if data should be fetched, go get it now.
-        if (this._dataFetchRequired) {
+        if (this.dataFetchRequired) {
             this.isErrored = false;
             this.dataLoading = true;
 
             esriRequest(this.url, {
                 responseType: "json"
             })
-            .then((response) => {
-                this._dataFetchRequired = false;
-                this._windy.setData(response.data)
-                this._doDraw(); // all sorted draw now.
-                this.dataLoading = false;
-            })
-            .otherwise((err) => {
-                console.error("Error occurred retrieving data. " + err);
-                this.dataLoading = false;
-                this.isErrored = true;
-            });
+                .then((response) => {
+                    this.dataFetchRequired = false;
+                    this.doDraw(response.data); // all sorted draw now.
+                    this.dataLoading = false;
+                })
+                .otherwise((err) => {
+                    console.error("Error occurred retrieving data. " + err);
+                    this.dataLoading = false;
+                    this.isErrored = true;
+                });
         }
         else {
             // no need for data, just draw.
-            this._doDraw();
+            this.doDraw();
 
         }
     }
 
-    /**
-     * Update the active view. The view must have been assigned to the map previously so that this layer has created or used the canvas element in layerview created already.
-     * @param view
-     */
-    setView(view: MapView | SceneView) {
-        this._activeView = view;
-        this.draw();
-    }
 
     stop() {
-        if (this._windy) {
-            this._windy.stop();
+        if (this.layerView) {
+            this.layerView.stopDraw();
         }
     }
 
     start() {
-        this.draw();
-    }
-
-
-    /**
-     * Is the active view 2d.
-     */
-    private _is2d() {
-        return this._activeView ? this._activeView.type === "2d" : false;
+        this.doDraw();
     }
 
     /**
      * Call the windy draw method
      */
-    private _doDraw() {
-        setTimeout(() => {
-            if (this._is2d()) {
-                this._windy.start(
-                    [[0, 0], [this._canvas2d.width, this._canvas2d.height]],
-                    this._canvas2d.width,
-                    this._canvas2d.height,
-                    [[this._southWest.x, this._southWest.y], [this._northEast.x, this._northEast.y]]
-                );
-
-                this._setDate();
-
-                this._isDrawing = false;
-
-                // if we have a queued draw do it right now.
-                if (this._queuedDraw) {
-                    this._queuedDraw = false;
-                    this.draw();
-                }
-            }
-        }, 500);
+    private doDraw(data?: any) {
+        this.layerView.prepDraw(data);
     }
 
-    /**
-     * Init the windy class 
-     * @param data
-     */
-    private _initWindy(data?) {
-        if (this._is2d()) {
-            this._windy = new Windy(
-                this._canvas2d,
-                undefined,
-                this.displayOptions);
-        }
-    }
-
-    /**
-     * Setup the geo bounds of the drawing area
-     * @param width
-     * @param height
-     */
-    private _setupDraw(width: number, height: number) {
-
-        // use the extent of the view, and not the extent passed into fetchImage...it was slightly off when it crossed IDL.
-        let extent = this._activeView.extent;
-        if (extent.spatialReference.isWebMercator) {
-            extent = <Extent>webMercatorUtils.webMercatorToGeographic(extent);
-        }
-
-        this._northEast = new Point({ x: extent.xmax, y: extent.ymax });
-        this._southWest = new Point({ x: extent.xmin, y: extent.ymin });
-
-        if (this._is2d()) {
-            this._canvas2d.width = width;
-            this._canvas2d.height = height;
-            // cater for the extent crossing the IDL
-            if (this._southWest.x > this._northEast.x && this._northEast.x < 0) {
-                this._northEast.x = 360 + this._northEast.x;
-            }
-        }
-    }
-
-    /**
-     * Handle layer view created.
-     * @param evt
-     */
-    private _layerViewCreated(evt) {
-        // set the active view to the first view loaded if there wasn't one included in the constructor properties.
-        this._viewLoadCount++;
-        if (this._viewLoadCount === 1 && !this._activeView) {
-            this._activeView = evt.layerView.view;
-        }
-
-        if (this._is2d()) {
-            this._layerView2d = evt.layerView;
-            // for map views, wait for the layerview to be attached
-            watchUtils.whenTrueOnce(evt.layerView, "attached", () => this._createCanvas(evt.layerView));
-        }
-        else {
-            this._layerView3d = evt.layerView;
-            this._createCanvas(evt.layerView);
-        }
-        watchUtils.pausable(evt.layerView.view, "stationary", (isStationary, b, c, view) => this._viewStationary(isStationary, b, c, view));
-
-        if (this.reportValues === true) {
-            evt.layerView.view.on("pointer-move", (evt) => this._viewPointerMove(evt));
-        }
-
-    }
-
-    /**
-     * Create or assign a canvas element for use in drawing.
-     * @param layerView
-     */
-    private _createCanvas(layerView) {
-        if (this._is2d()) {
-            // For a map view get the container element of the layer view and add a canvas to it.
-            this._canvas2d = document.createElement("canvas");
-            layerView.container.element.appendChild(this._canvas2d);
-
-            // default some styles 
-            this._canvas2d.style.position = "absolute";
-            this._canvas2d.style.left = "0";
-            this._canvas2d.style.top = "0";
-        }
-        else {
-            // Handle scene view canvas in future.            
-        }
-
-        // setup windy once the canvas has been created
-        this._initWindy();
-    }
-
-
-    /**
-     * view stationary handler, clear canvas or force a redraw
-     */
-    private _viewStationary(isStationary, b, c, view) {
-        if (!this._activeView) return;
-
-        if (!isStationary) {
-            if (this._windy) {
-                if (this._is2d()) {
-                    this._windy.stop(); // force a stop of windy when view is moving
-                    this._canvas2d.getContext("2d").clearRect(0, 0, this._activeView.width, this._activeView.height);
-                }
-            }
-        }
-        else {
-            if (this._isDrawing) {
-                this._queuedDraw = true;
-            }
-            else {
-
-                if (this.displayOptions.particleMultiplierByZoom) {
-                    this._setParticleMultiplier();
-                }
-
-                this.draw();
-            }
-        }
-    }
 
     private _setParticleMultiplier() {
-        let currentZoom = this._activeView.zoom;
+        let currentZoom = this.layerView.view.zoom;
         let baseZoom = this.displayOptions.particleMultiplierByZoom.zoomLevel;
         let pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier;
 
@@ -385,22 +442,22 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
         if (pm < this.displayOptions.particleMultiplierByZoom.minMultiplier) pm = this.displayOptions.particleMultiplierByZoom.minMultiplier;
         else if (pm > this.displayOptions.particleMultiplierByZoom.maxMultiplier) pm = this.displayOptions.particleMultiplierByZoom.maxMultiplier;
 
-        if (this._is2d() && this._windy) {
-            this._windy.PARTICLE_MULTIPLIER = pm;
+        if (this.layerView.windy) {
+            this.layerView.windy.PARTICLE_MULTIPLIER = pm;
         }
 
     }
 
-    private _viewPointerMove(evt) {
-        if (!this._windy || !this.visible) return;
+    private viewPointerMove(evt) {
+        if (!this.layerView.windy || !this.visible) return;
 
         let mousePos = this._getMousePos(evt);
-        let point = this._activeView.toMap({ x: mousePos.x, y: mousePos.y });
+        let point = this.layerView.view.toMap({ x: mousePos.x, y: mousePos.y });
         if (point.spatialReference.isWebMercator) {
             point = <Point>webMercatorUtils.webMercatorToGeographic(point);
         }
 
-        let grid = this._windy.interpolate(point.x, point.y);
+        let grid = this.layerView.windy.interpolate(point.x, point.y);
         let result: PointReport = {
             point: point,
             target: this
@@ -449,7 +506,7 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
 
     private _getMousePos(evt) {
         // container on the view is actually a html element at this point, not a string as the typings suggest.
-        let container: any = this._activeView.container;
+        let container: any = this.layerView.view.container;
         let rect = container.getBoundingClientRect();
         return {
             x: evt.x - rect.left,
@@ -462,8 +519,8 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
      * Watch of the url property - call draw again with a refetch
      */
     private _urlChanged(a, b, c, d) {
-        if (this._windy) this._windy.stop();
-        this._dataFetchRequired = true;
+        this.stop();
+        this.dataFetchRequired = true;
         this.draw();
     }
 
@@ -472,7 +529,7 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
      */
     private _visibleChanged(visible, b, c, d) {
         if (!visible) {
-            if (this._windy) this._windy.stop();
+            this.stop();
         }
         else {
             this.draw();
@@ -484,28 +541,13 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
      * Watch of displayOptions - call draw again with new options set on windy.
      */
     private _displayOptionsChanged(newOptions, b, c, d) {
-        if (!this._windy) return;
-        this._windy.stop();
-        this._windy.setDisplayOptions(newOptions);
+        if (!this.layerView.windy) return;
+
+        this.layerView.windy.stop();
+        this.layerView.windy.setDisplayOptions(newOptions);
         this.draw();
     }
 
-    private _setDate() {
-        if (this._is2d() && this._windy) {
-            if (this._windy.refTime && this._windy.forecastTime) {
-
-                // assume the ref time is an iso string, or some other equivalent that javascript Date object can parse.
-                let d = new Date(this._windy.refTime);
-
-                // add the forecast time as hours to the refTime;
-                d.setHours(d.getHours() + this._windy.forecastTime);
-                this.date = d;
-                return;
-            }
-        }
-
-        this.date = undefined;
-    }
 }
 
 
@@ -531,6 +573,11 @@ class Windy {
     PARTICLE_REDUCTION: number;
     FRAME_RATE: number;
     FRAME_TIME: number;
+    APPLY_FADE_TRAIL: boolean;
+
+    //DRAW_TYPE: DrawType;
+
+
     colorScale: any;
     canvas: HTMLCanvasElement;
 
@@ -546,20 +593,19 @@ class Windy {
     grid;
     gridData: any;
     date;
-    λ0;
-    φ0;
-    Δλ;
-    Δφ;
+    lo1;
+    la1;
+    dx;
+    dy;
     ni;
     nj;
 
     private _scanMode: number;
     private _dynamicParticleMultiplier: boolean;
 
-    constructor(canvas: HTMLCanvasElement, data?: any, options?: DisplayOptions) {
+    constructor(canvas: HTMLCanvasElement, options: DisplayOptions, data?: any) {
 
         this.canvas = canvas;
-        if (!options) options = {};
         this.setDisplayOptions(options);
         this.gridData = data;
 
@@ -583,8 +629,15 @@ class Windy {
         this.FRAME_RATE = options.frameRate || 15;
         this.FRAME_TIME = 1000 / this.FRAME_RATE; // desired frames per second
 
+        this.APPLY_FADE_TRAIL = options.applyFadeTrail === false ? false : true;
+
+        //this.DRAW_TYPE = options.drawType;
+
+
         var defaultColorScale = ["rgb(61,160,247)", "rgb(99,164,217)", "rgb(138,168,188)", "rgb(177,173,158)", "rgb(216,177,129)", "rgb(255,182,100)", "rgb(240,145,87)", "rgb(225,109,74)", "rgb(210,72,61)", "rgb(195,36,48)", "rgb(180,0,35)"];
         this.colorScale = options.colorScale || defaultColorScale;
+
+
     }
 
     start(bounds, width, height, extent) {
@@ -618,20 +671,20 @@ class Windy {
 
     /**
     * Get interpolated grid value from Lon/Lat position
-   * @param λ {Float} Longitude
-   * @param φ {Float} Latitude
+   * @param lon {Float} Longitude
+   * @param lat {Float} Latitude
    * @returns {Object}
    */
-    interpolate(λ, φ) {
+    interpolate(lon, lat) {
 
         if (!this.grid) return null;
 
-        let i = this.floorMod(λ - this.λ0, 360) / this.Δλ; // calculate longitude index in wrapped range [0, 360)
-        let j = (this.φ0 - φ) / this.Δφ; // calculate latitude index in direction +90 to -90
+        let i = this.floorMod(lon - this.lo1, 360) / this.dx; // calculate longitude index in wrapped range [0, 360)
+        let j = (this.la1 - lat) / this.dy; // calculate latitude index in direction +90 to -90
 
         if (this._scanMode === 64) {
             // calculate latitude index in direction -90 to +90 as this is scan mode 64
-            j = (φ - this.φ0) / this.Δφ;
+            j = (lat - this.la1) / this.dy;
             j = this.grid.length - j;
         }
 
@@ -662,11 +715,11 @@ class Windy {
         this.builder = this.createBuilder(data);
         var header = this.builder.header;
 
-        this.λ0 = header.lo1;
-        this.φ0 = header.la1; // the grid's origin (e.g., 0.0E, 90.0N)
+        this.lo1 = header.lo1;
+        this.la1 = header.la1; // the grid's origin (e.g., 0.0E, 90.0N)
 
-        this.Δλ = header.dx;
-        this.Δφ = header.dy; // distance between grid points (e.g., 2.5 deg lon, 2.5 deg lat)
+        this.dx = header.dx;
+        this.dy = header.dy; // distance between grid points (e.g., 2.5 deg lon, 2.5 deg lat)
 
         this.ni = header.nx;
         this.nj = header.ny; // number of grid points W-E and N-S (e.g., 144 x 73)
@@ -678,7 +731,7 @@ class Windy {
 
         this.grid = [];
         var p = 0;
-        var isContinuous = Math.floor(this.ni * this.Δλ) >= 360;
+        var isContinuous = Math.floor(this.ni * this.dx) >= 360;
 
         if (header.scanMode === 0) {
             // Scan mode 0. Longitude increases from λ0, and latitude decreases from φ0.
@@ -743,9 +796,9 @@ class Windy {
                 case "0,2,0":
                     directionTrue = record; //waves and wind direction
                     break;
-                case "10,0,8": 
+                case "10,0,8":
                 case "10,0,3":
-                case "0,2,1": 
+                case "0,2,1":
                     magnitude = record; //waves and wind height
                     break;
                 default:
@@ -875,10 +928,10 @@ class Windy {
     * Calculate distortion of the wind vector caused by the shape of the projection at point (x, y). The wind
     * vector is modified in place and returned by this function.
     */
-    private distort(projection, λ, φ, x, y, scale, wind, windy) {
+    private distort(projection, lon, lat, x, y, scale, wind, windy) {
         var u = wind[0] * scale;
         var v = wind[1] * scale;
-        var d = this.distortion(projection, λ, φ, x, y, windy);
+        var d = this.distortion(projection, lon, lat, x, y, windy);
 
         // Scale distortion vectors by u and v, then add.
         wind[0] = d[0] * u + d[2] * v;
@@ -886,19 +939,19 @@ class Windy {
         return wind;
     }
 
-    private distortion(projection, λ, φ, x, y, windy) {
-        let τ = 2 * Math.PI;
+    private distortion(projection, lon, lat, x, y, windy) {
+        let tau = 2 * Math.PI;
         let H = Math.pow(10, -5.2);
-        let hλ = λ < 0 ? H : -H;
-        let hφ = φ < 0 ? H : -H;
+        let hLon = lon < 0 ? H : -H;
+        let hLat = lat < 0 ? H : -H;
 
-        let pλ = this.project(φ, λ + hλ, windy);
-        let pφ = this.project(φ + hφ, λ, windy);
+        let pLon = this.project(lat, lon + hLon, windy);
+        let pLat = this.project(lat + hLat, lon, windy);
 
         // Meridian scale factor (see Snyder, equation 4-3), where R = 1. This handles issue where length of 1º λ
         // changes depending on φ. Without this, there is a pinching effect at the poles.
-        let k = Math.cos(φ / 360 * τ);
-        return [(pλ[0] - x) / hλ / k, (pλ[1] - y) / hλ / k, (pφ[0] - x) / hφ, (pφ[1] - y) / hφ];
+        let k = Math.cos(lat / 360 * tau);
+        return [(pLon[0] - x) / hLon / k, (pLon[1] - y) / hLon / k, (pLat[0] - x) / hLat, (pLat[1] - y) / hLat];
     }
 
     private mercY(lat) {
@@ -945,13 +998,13 @@ class Windy {
             for (let y = bounds.y; y <= bounds.yMax; y += 2) {
                 let coord = this.invert(x, y, extent);
                 if (coord) {
-                    var λ = coord[0],
-                        φ = coord[1];
-                    if (isFinite(λ)) {
+                    var lon = coord[0],
+                        lat = coord[1];
+                    if (isFinite(lon)) {
                         //let wind = grid.interpolate(λ, φ);
-                        let wind = this.interpolate(λ, φ);
+                        let wind = this.interpolate(lon, lat);
                         if (wind) {
-                            wind = this.distort(projection, λ, φ, x, y, velocityScale, wind, extent);
+                            wind = this.distort(projection, lon, lat, x, y, velocityScale, wind, extent);
                             column[y + 1] = column[y] = wind;
                         }
                     }
@@ -1076,12 +1129,18 @@ class Windy {
 
         let draw = () => {
             // Fade existing particle trails.
-            let prev = "lighter";
-            g.globalCompositeOperation = "destination-in";
-            g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
-            g.globalCompositeOperation = prev;
-            g.globalAlpha = 0.9;
 
+            if (this.APPLY_FADE_TRAIL) {
+                let prev = "lighter";
+                g.globalCompositeOperation = "destination-in";
+                g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+                g.globalCompositeOperation = prev;
+                g.globalAlpha = 0.9;
+            }
+            else {
+                g.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            }
+            
             // Draw new particle trails.
             buckets.forEach((bucket, i) => {
                 if (bucket.length > 0) {

@@ -33,53 +33,195 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
-define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri/geometry/support/webMercatorUtils", "esri/core/watchUtils", "esri/geometry/Point", "esri/core/accessorSupport/decorators"], function (require, exports, GraphicsLayer, esriRequest, webMercatorUtils, watchUtils, Point, asd) {
+define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri/geometry/support/webMercatorUtils", "esri/core/watchUtils", "esri/geometry/Point", "esri/core/accessorSupport/decorators", "esri/views/2d/layers/BaseLayerView2D"], function (require, exports, GraphicsLayer, esriRequest, webMercatorUtils, watchUtils, Point, asd, BaseLayerView2D) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    var AnimatedEnvironmentLayerView2D = /** @class */ (function (_super) {
+        __extends(AnimatedEnvironmentLayerView2D, _super);
+        function AnimatedEnvironmentLayerView2D(props) {
+            var _this = _super.call(this) || this;
+            _this.view = props.view;
+            _this.layer = props.layer;
+            _this.view.on("resize", function () {
+                if (!_this.context)
+                    return;
+                // resize the canvas
+                _this.context.canvas.width = _this.view.width;
+                _this.context.canvas.height = _this.view.height;
+            });
+            watchUtils.watch(_this.layer, "visible", function (nv, olv, pn, ta) {
+                if (!nv) {
+                    _this.clear();
+                }
+                else {
+                    _this.prepDraw();
+                }
+            });
+            return _this;
+        }
+        AnimatedEnvironmentLayerView2D.prototype.render = function (renderParameters) {
+            this.viewState = renderParameters.state;
+            if (!renderParameters.stationary) {
+                // not stationary so clear if drawn and set to prep again
+                if (this.drawing) {
+                    this.clear();
+                    this.drawing = false;
+                }
+                this.drawPrepping = false;
+                this.drawReady = false;
+                return;
+            }
+            if (!this.drawPrepping && !this.drawReady) {
+                // prep the draw
+                this.drawPrepping = true;
+                if (this.windy.gridData) {
+                    this.prepDraw();
+                }
+                return;
+            }
+            if (this.drawReady) {
+                if (!this.drawing) {
+                    // this.animationLoop(); // haven't started drawing so kick off our animation loop
+                    this.startWindy();
+                }
+                // draw the custom context into this layers context
+                renderParameters.context.drawImage(this.context.canvas, 0, 0);
+                this.drawing = true;
+                // call request render so we copy the draw again
+                this.requestRender();
+            }
+        };
+        AnimatedEnvironmentLayerView2D.prototype.startWindy = function () {
+            var _this = this;
+            setTimeout(function () {
+                _this.windy.start([[0, 0], [_this.context.canvas.width, _this.context.canvas.height]], _this.context.canvas.width, _this.context.canvas.height, [[_this.southWest.x, _this.southWest.y], [_this.northEast.x, _this.northEast.y]]);
+                _this.setDate();
+            }, 500);
+        };
+        AnimatedEnvironmentLayerView2D.prototype.attach = function () {
+            // use attach to initilaize a custom canvas to draw on
+            // create the canvas, set some properties. 
+            var canvas = document.createElement("canvas");
+            canvas.id = "ael-" + Date.now();
+            canvas.style.position = "absolute";
+            canvas.style.top = "0";
+            canvas.style.left = "0";
+            canvas.width = this.view.width;
+            canvas.height = this.view.height;
+            var context = canvas.getContext("2d");
+            this.context = context;
+            this.initWindy();
+        };
+        /**
+         * Init the windy class
+         * @param data
+         */
+        AnimatedEnvironmentLayerView2D.prototype.initWindy = function (data) {
+            this.windy = new Windy(this.context.canvas, this.layer.displayOptions, undefined);
+        };
+        AnimatedEnvironmentLayerView2D.prototype.clear = function (stopDraw) {
+            if (stopDraw === void 0) { stopDraw = true; }
+            if (stopDraw) {
+                this.stopDraw();
+            }
+            if (this.context) {
+                this.context.clearRect(0, 0, this.view.width, this.view.height);
+            }
+        };
+        AnimatedEnvironmentLayerView2D.prototype.stopDraw = function () {
+            this.windy.stop();
+            this.drawing = false;
+        };
+        AnimatedEnvironmentLayerView2D.prototype.prepDraw = function (data) {
+            if (data)
+                this.windy.setData(data);
+            this.startDraw();
+            this.drawPrepping = false;
+            this.drawReady = true;
+            this.requestRender();
+        };
+        AnimatedEnvironmentLayerView2D.prototype.startDraw = function () {
+            // use the extent of the view, and not the extent passed into fetchImage...it was slightly off when it crossed IDL.
+            var extent = this.view.extent;
+            if (extent.spatialReference.isWebMercator) {
+                extent = webMercatorUtils.webMercatorToGeographic(extent);
+            }
+            this.northEast = new Point({ x: extent.xmax, y: extent.ymax });
+            this.southWest = new Point({ x: extent.xmin, y: extent.ymin });
+            // resize the canvas
+            this.context.canvas.width = this.view.width;
+            this.context.canvas.height = this.view.height;
+            // cater for the extent crossing the IDL
+            if (this.southWest.x > this.northEast.x && this.northEast.x < 0) {
+                this.northEast.x = 360 + this.northEast.x;
+            }
+        };
+        AnimatedEnvironmentLayerView2D.prototype.setDate = function () {
+            if (this.windy) {
+                if (this.windy.refTime && this.windy.forecastTime) {
+                    // assume the ref time is an iso string, or some other equivalent that javascript Date object can parse.
+                    var d = new Date(this.windy.refTime);
+                    // add the forecast time as hours to the refTime;
+                    d.setHours(d.getHours() + this.windy.forecastTime);
+                    this.date = d;
+                    return;
+                }
+            }
+            this.date = undefined;
+        };
+        return AnimatedEnvironmentLayerView2D;
+    }(BaseLayerView2D));
     var AnimatedEnvironmentLayer = /** @class */ (function (_super) {
         __extends(AnimatedEnvironmentLayer, _super);
         function AnimatedEnvironmentLayer(properties) {
             var _this = _super.call(this, properties) || this;
-            _this._viewLoadCount = 0;
-            _this._isDrawing = false;
             // If the active view is set in properties, then set it here.
-            _this._activeView = properties.activeView;
             _this.url = properties.url;
             _this.displayOptions = properties.displayOptions || {};
             _this.reportValues = properties.reportValues === false ? false : true; // default to true
-            _this.on("layerview-create", function (evt) { return _this._layerViewCreated(evt); });
             // watch url prop so a fetch of data and redraw will occur.
             watchUtils.watch(_this, "url", function (a, b, c, d) { return _this._urlChanged(a, b, c, d); });
             // watch url prop so a fetch of data and redraw will occur.
             watchUtils.watch(_this, "visible", function (a, b, c, d) { return _this._visibleChanged(a, b, c, d); });
             // watch display options so to redraw when changed.
             watchUtils.watch(_this, "displayOptions", function (a, b, c, d) { return _this._displayOptionsChanged(a, b, c, d); });
-            _this._dataFetchRequired = true;
+            _this.dataFetchRequired = true;
             return _this;
         }
+        AnimatedEnvironmentLayer.prototype.createLayerView = function (view) {
+            var _this = this;
+            // only supports 2d right now.
+            if (view.type !== "2d")
+                return;
+            // hook up the AnimatedEnvironmentLayerView2D as the layer view
+            this.layerView = new AnimatedEnvironmentLayerView2D({
+                view: view,
+                layer: this
+            });
+            this.layerView.view.on("pointer-move", function (evt) { return _this.viewPointerMove(evt); });
+            this.draw(true);
+            return this.layerView;
+        };
         /**
          * Start a draw
          */
         AnimatedEnvironmentLayer.prototype.draw = function (forceDataRefetch) {
             var _this = this;
             if (forceDataRefetch != null) {
-                this._dataFetchRequired = forceDataRefetch;
+                this.dataFetchRequired = forceDataRefetch;
             }
             if (!this.url || !this.visible)
                 return; // no url set, not visible or is currently drawing, exit here.
-            this._isDrawing = true;
-            this._setupDraw(this._activeView.width, this._activeView.height);
             // if data should be fetched, go get it now.
-            if (this._dataFetchRequired) {
+            if (this.dataFetchRequired) {
                 this.isErrored = false;
                 this.dataLoading = true;
                 esriRequest(this.url, {
                     responseType: "json"
                 })
                     .then(function (response) {
-                    _this._dataFetchRequired = false;
-                    _this._windy.setData(response.data);
-                    _this._doDraw(); // all sorted draw now.
+                    _this.dataFetchRequired = false;
+                    _this.doDraw(response.data); // all sorted draw now.
                     _this.dataLoading = false;
                 })
                     .otherwise(function (err) {
@@ -90,153 +232,25 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             }
             else {
                 // no need for data, just draw.
-                this._doDraw();
+                this.doDraw();
             }
         };
-        /**
-         * Update the active view. The view must have been assigned to the map previously so that this layer has created or used the canvas element in layerview created already.
-         * @param view
-         */
-        AnimatedEnvironmentLayer.prototype.setView = function (view) {
-            this._activeView = view;
-            this.draw();
-        };
         AnimatedEnvironmentLayer.prototype.stop = function () {
-            if (this._windy) {
-                this._windy.stop();
+            if (this.layerView) {
+                this.layerView.stopDraw();
             }
         };
         AnimatedEnvironmentLayer.prototype.start = function () {
-            this.draw();
-        };
-        /**
-         * Is the active view 2d.
-         */
-        AnimatedEnvironmentLayer.prototype._is2d = function () {
-            return this._activeView ? this._activeView.type === "2d" : false;
+            this.doDraw();
         };
         /**
          * Call the windy draw method
          */
-        AnimatedEnvironmentLayer.prototype._doDraw = function () {
-            var _this = this;
-            setTimeout(function () {
-                if (_this._is2d()) {
-                    _this._windy.start([[0, 0], [_this._canvas2d.width, _this._canvas2d.height]], _this._canvas2d.width, _this._canvas2d.height, [[_this._southWest.x, _this._southWest.y], [_this._northEast.x, _this._northEast.y]]);
-                    _this._setDate();
-                    _this._isDrawing = false;
-                    // if we have a queued draw do it right now.
-                    if (_this._queuedDraw) {
-                        _this._queuedDraw = false;
-                        _this.draw();
-                    }
-                }
-            }, 500);
-        };
-        /**
-         * Init the windy class
-         * @param data
-         */
-        AnimatedEnvironmentLayer.prototype._initWindy = function (data) {
-            if (this._is2d()) {
-                this._windy = new Windy(this._canvas2d, undefined, this.displayOptions);
-            }
-        };
-        /**
-         * Setup the geo bounds of the drawing area
-         * @param width
-         * @param height
-         */
-        AnimatedEnvironmentLayer.prototype._setupDraw = function (width, height) {
-            // use the extent of the view, and not the extent passed into fetchImage...it was slightly off when it crossed IDL.
-            var extent = this._activeView.extent;
-            if (extent.spatialReference.isWebMercator) {
-                extent = webMercatorUtils.webMercatorToGeographic(extent);
-            }
-            this._northEast = new Point({ x: extent.xmax, y: extent.ymax });
-            this._southWest = new Point({ x: extent.xmin, y: extent.ymin });
-            if (this._is2d()) {
-                this._canvas2d.width = width;
-                this._canvas2d.height = height;
-                // cater for the extent crossing the IDL
-                if (this._southWest.x > this._northEast.x && this._northEast.x < 0) {
-                    this._northEast.x = 360 + this._northEast.x;
-                }
-            }
-        };
-        /**
-         * Handle layer view created.
-         * @param evt
-         */
-        AnimatedEnvironmentLayer.prototype._layerViewCreated = function (evt) {
-            var _this = this;
-            // set the active view to the first view loaded if there wasn't one included in the constructor properties.
-            this._viewLoadCount++;
-            if (this._viewLoadCount === 1 && !this._activeView) {
-                this._activeView = evt.layerView.view;
-            }
-            if (this._is2d()) {
-                this._layerView2d = evt.layerView;
-                // for map views, wait for the layerview to be attached
-                watchUtils.whenTrueOnce(evt.layerView, "attached", function () { return _this._createCanvas(evt.layerView); });
-            }
-            else {
-                this._layerView3d = evt.layerView;
-                this._createCanvas(evt.layerView);
-            }
-            watchUtils.pausable(evt.layerView.view, "stationary", function (isStationary, b, c, view) { return _this._viewStationary(isStationary, b, c, view); });
-            if (this.reportValues === true) {
-                evt.layerView.view.on("pointer-move", function (evt) { return _this._viewPointerMove(evt); });
-            }
-        };
-        /**
-         * Create or assign a canvas element for use in drawing.
-         * @param layerView
-         */
-        AnimatedEnvironmentLayer.prototype._createCanvas = function (layerView) {
-            if (this._is2d()) {
-                // For a map view get the container element of the layer view and add a canvas to it.
-                this._canvas2d = document.createElement("canvas");
-                layerView.container.element.appendChild(this._canvas2d);
-                // default some styles 
-                this._canvas2d.style.position = "absolute";
-                this._canvas2d.style.left = "0";
-                this._canvas2d.style.top = "0";
-            }
-            else {
-                // Handle scene view canvas in future.            
-            }
-            // setup windy once the canvas has been created
-            this._initWindy();
-        };
-        /**
-         * view stationary handler, clear canvas or force a redraw
-         */
-        AnimatedEnvironmentLayer.prototype._viewStationary = function (isStationary, b, c, view) {
-            if (!this._activeView)
-                return;
-            if (!isStationary) {
-                if (this._windy) {
-                    if (this._is2d()) {
-                        this._windy.stop(); // force a stop of windy when view is moving
-                        this._canvas2d.getContext("2d").clearRect(0, 0, this._activeView.width, this._activeView.height);
-                    }
-                }
-            }
-            else {
-                if (this._isDrawing) {
-                    this._queuedDraw = true;
-                }
-                else {
-                    if (this.displayOptions.particleMultiplierByZoom) {
-                        this._setParticleMultiplier();
-                    }
-                    this.draw();
-                }
-            }
+        AnimatedEnvironmentLayer.prototype.doDraw = function (data) {
+            this.layerView.prepDraw(data);
         };
         AnimatedEnvironmentLayer.prototype._setParticleMultiplier = function () {
-            var currentZoom = this._activeView.zoom;
+            var currentZoom = this.layerView.view.zoom;
             var baseZoom = this.displayOptions.particleMultiplierByZoom.zoomLevel;
             var pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier;
             if (currentZoom > baseZoom) {
@@ -251,19 +265,19 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
                 pm = this.displayOptions.particleMultiplierByZoom.minMultiplier;
             else if (pm > this.displayOptions.particleMultiplierByZoom.maxMultiplier)
                 pm = this.displayOptions.particleMultiplierByZoom.maxMultiplier;
-            if (this._is2d() && this._windy) {
-                this._windy.PARTICLE_MULTIPLIER = pm;
+            if (this.layerView.windy) {
+                this.layerView.windy.PARTICLE_MULTIPLIER = pm;
             }
         };
-        AnimatedEnvironmentLayer.prototype._viewPointerMove = function (evt) {
-            if (!this._windy || !this.visible)
+        AnimatedEnvironmentLayer.prototype.viewPointerMove = function (evt) {
+            if (!this.layerView.windy || !this.visible)
                 return;
             var mousePos = this._getMousePos(evt);
-            var point = this._activeView.toMap({ x: mousePos.x, y: mousePos.y });
+            var point = this.layerView.view.toMap({ x: mousePos.x, y: mousePos.y });
             if (point.spatialReference.isWebMercator) {
                 point = webMercatorUtils.webMercatorToGeographic(point);
             }
-            var grid = this._windy.interpolate(point.x, point.y);
+            var grid = this.layerView.windy.interpolate(point.x, point.y);
             var result = {
                 point: point,
                 target: this
@@ -303,7 +317,7 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
         };
         AnimatedEnvironmentLayer.prototype._getMousePos = function (evt) {
             // container on the view is actually a html element at this point, not a string as the typings suggest.
-            var container = this._activeView.container;
+            var container = this.layerView.view.container;
             var rect = container.getBoundingClientRect();
             return {
                 x: evt.x - rect.left,
@@ -314,9 +328,8 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
          * Watch of the url property - call draw again with a refetch
          */
         AnimatedEnvironmentLayer.prototype._urlChanged = function (a, b, c, d) {
-            if (this._windy)
-                this._windy.stop();
-            this._dataFetchRequired = true;
+            this.stop();
+            this.dataFetchRequired = true;
             this.draw();
         };
         /**
@@ -324,8 +337,7 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
          */
         AnimatedEnvironmentLayer.prototype._visibleChanged = function (visible, b, c, d) {
             if (!visible) {
-                if (this._windy)
-                    this._windy.stop();
+                this.stop();
             }
             else {
                 this.draw();
@@ -335,24 +347,11 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
          * Watch of displayOptions - call draw again with new options set on windy.
          */
         AnimatedEnvironmentLayer.prototype._displayOptionsChanged = function (newOptions, b, c, d) {
-            if (!this._windy)
+            if (!this.layerView.windy)
                 return;
-            this._windy.stop();
-            this._windy.setDisplayOptions(newOptions);
+            this.layerView.windy.stop();
+            this.layerView.windy.setDisplayOptions(newOptions);
             this.draw();
-        };
-        AnimatedEnvironmentLayer.prototype._setDate = function () {
-            if (this._is2d() && this._windy) {
-                if (this._windy.refTime && this._windy.forecastTime) {
-                    // assume the ref time is an iso string, or some other equivalent that javascript Date object can parse.
-                    var d = new Date(this._windy.refTime);
-                    // add the forecast time as hours to the refTime;
-                    d.setHours(d.getHours() + this._windy.forecastTime);
-                    this.date = d;
-                    return;
-                }
-            }
-            this.date = undefined;
         };
         __decorate([
             asd.property(),
@@ -392,11 +391,9 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
      Also credit to - https://github.com/Esri/wind-js
      */
     var Windy = /** @class */ (function () {
-        function Windy(canvas, data, options) {
+        function Windy(canvas, options, data) {
             this.NULL_WIND_VECTOR = [NaN, NaN, null]; // singleton for no wind in the form: [u, v, magnitude]
             this.canvas = canvas;
-            if (!options)
-                options = {};
             this.setDisplayOptions(options);
             this.gridData = data;
         }
@@ -414,6 +411,8 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             this.PARTICLE_REDUCTION = Math.pow(window.devicePixelRatio, 1 / 3) || 1.6; // multiply particle count for mobiles by this amount
             this.FRAME_RATE = options.frameRate || 15;
             this.FRAME_TIME = 1000 / this.FRAME_RATE; // desired frames per second
+            this.APPLY_FADE_TRAIL = options.applyFadeTrail === false ? false : true;
+            //this.DRAW_TYPE = options.drawType;
             var defaultColorScale = ["rgb(61,160,247)", "rgb(99,164,217)", "rgb(138,168,188)", "rgb(177,173,158)", "rgb(216,177,129)", "rgb(255,182,100)", "rgb(240,145,87)", "rgb(225,109,74)", "rgb(210,72,61)", "rgb(195,36,48)", "rgb(180,0,35)"];
             this.colorScale = options.colorScale || defaultColorScale;
         };
@@ -446,18 +445,18 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
         };
         /**
         * Get interpolated grid value from Lon/Lat position
-       * @param λ {Float} Longitude
-       * @param φ {Float} Latitude
+       * @param lon {Float} Longitude
+       * @param lat {Float} Latitude
        * @returns {Object}
        */
-        Windy.prototype.interpolate = function (λ, φ) {
+        Windy.prototype.interpolate = function (lon, lat) {
             if (!this.grid)
                 return null;
-            var i = this.floorMod(λ - this.λ0, 360) / this.Δλ; // calculate longitude index in wrapped range [0, 360)
-            var j = (this.φ0 - φ) / this.Δφ; // calculate latitude index in direction +90 to -90
+            var i = this.floorMod(lon - this.lo1, 360) / this.dx; // calculate longitude index in wrapped range [0, 360)
+            var j = (this.la1 - lat) / this.dy; // calculate latitude index in direction +90 to -90
             if (this._scanMode === 64) {
                 // calculate latitude index in direction -90 to +90 as this is scan mode 64
-                j = (φ - this.φ0) / this.Δφ;
+                j = (lat - this.la1) / this.dy;
                 j = this.grid.length - j;
             }
             var fi = Math.floor(i), ci = fi + 1;
@@ -480,10 +479,10 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
         Windy.prototype.buildGrid = function (data, callback) {
             this.builder = this.createBuilder(data);
             var header = this.builder.header;
-            this.λ0 = header.lo1;
-            this.φ0 = header.la1; // the grid's origin (e.g., 0.0E, 90.0N)
-            this.Δλ = header.dx;
-            this.Δφ = header.dy; // distance between grid points (e.g., 2.5 deg lon, 2.5 deg lat)
+            this.lo1 = header.lo1;
+            this.la1 = header.la1; // the grid's origin (e.g., 0.0E, 90.0N)
+            this.dx = header.dx;
+            this.dy = header.dy; // distance between grid points (e.g., 2.5 deg lon, 2.5 deg lat)
             this.ni = header.nx;
             this.nj = header.ny; // number of grid points W-E and N-S (e.g., 144 x 73)
             this.date = new Date(header.refTime);
@@ -491,7 +490,7 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             this._scanMode = header.scanMode;
             this.grid = [];
             var p = 0;
-            var isContinuous = Math.floor(this.ni * this.Δλ) >= 360;
+            var isContinuous = Math.floor(this.ni * this.dx) >= 360;
             if (header.scanMode === 0) {
                 // Scan mode 0. Longitude increases from λ0, and latitude decreases from φ0.
                 // http://www.nco.ncep.noaa.gov/pmb/docs/grib2/grib2_table3-4.shtml
@@ -652,26 +651,26 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
         * Calculate distortion of the wind vector caused by the shape of the projection at point (x, y). The wind
         * vector is modified in place and returned by this function.
         */
-        Windy.prototype.distort = function (projection, λ, φ, x, y, scale, wind, windy) {
+        Windy.prototype.distort = function (projection, lon, lat, x, y, scale, wind, windy) {
             var u = wind[0] * scale;
             var v = wind[1] * scale;
-            var d = this.distortion(projection, λ, φ, x, y, windy);
+            var d = this.distortion(projection, lon, lat, x, y, windy);
             // Scale distortion vectors by u and v, then add.
             wind[0] = d[0] * u + d[2] * v;
             wind[1] = d[1] * u + d[3] * v;
             return wind;
         };
-        Windy.prototype.distortion = function (projection, λ, φ, x, y, windy) {
-            var τ = 2 * Math.PI;
+        Windy.prototype.distortion = function (projection, lon, lat, x, y, windy) {
+            var tau = 2 * Math.PI;
             var H = Math.pow(10, -5.2);
-            var hλ = λ < 0 ? H : -H;
-            var hφ = φ < 0 ? H : -H;
-            var pλ = this.project(φ, λ + hλ, windy);
-            var pφ = this.project(φ + hφ, λ, windy);
+            var hLon = lon < 0 ? H : -H;
+            var hLat = lat < 0 ? H : -H;
+            var pLon = this.project(lat, lon + hLon, windy);
+            var pLat = this.project(lat + hLat, lon, windy);
             // Meridian scale factor (see Snyder, equation 4-3), where R = 1. This handles issue where length of 1º λ
             // changes depending on φ. Without this, there is a pinching effect at the poles.
-            var k = Math.cos(φ / 360 * τ);
-            return [(pλ[0] - x) / hλ / k, (pλ[1] - y) / hλ / k, (pφ[0] - x) / hφ, (pφ[1] - y) / hφ];
+            var k = Math.cos(lat / 360 * tau);
+            return [(pLon[0] - x) / hLon / k, (pLon[1] - y) / hLon / k, (pLat[0] - x) / hLat, (pLat[1] - y) / hLat];
         };
         Windy.prototype.mercY = function (lat) {
             return Math.log(Math.tan(lat / 2 + Math.PI / 4));
@@ -709,12 +708,12 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
                 for (var y = bounds.y; y <= bounds.yMax; y += 2) {
                     var coord = _this.invert(x, y, extent);
                     if (coord) {
-                        var λ = coord[0], φ = coord[1];
-                        if (isFinite(λ)) {
+                        var lon = coord[0], lat = coord[1];
+                        if (isFinite(lon)) {
                             //let wind = grid.interpolate(λ, φ);
-                            var wind = _this.interpolate(λ, φ);
+                            var wind = _this.interpolate(lon, lat);
                             if (wind) {
-                                wind = _this.distort(projection, λ, φ, x, y, velocityScale, wind, extent);
+                                wind = _this.distort(projection, lon, lat, x, y, velocityScale, wind, extent);
                                 column[y + 1] = column[y] = wind;
                             }
                         }
@@ -827,11 +826,16 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             g.globalAlpha = 0.6;
             var draw = function () {
                 // Fade existing particle trails.
-                var prev = "lighter";
-                g.globalCompositeOperation = "destination-in";
-                g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
-                g.globalCompositeOperation = prev;
-                g.globalAlpha = 0.9;
+                if (_this.APPLY_FADE_TRAIL) {
+                    var prev = "lighter";
+                    g.globalCompositeOperation = "destination-in";
+                    g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+                    g.globalCompositeOperation = prev;
+                    g.globalAlpha = 0.9;
+                }
+                else {
+                    g.clearRect(0, 0, _this.canvas.width, _this.canvas.height);
+                }
                 // Draw new particle trails.
                 buckets.forEach(function (bucket, i) {
                     if (bucket.length > 0) {

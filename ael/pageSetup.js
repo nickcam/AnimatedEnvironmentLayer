@@ -69,7 +69,7 @@ define(["require", "exports", "esri/views/MapView", "esri/Map", "esri/geometry/P
                         particleMultiplier: 4,
                         zoomLevel: 4
                     }
-                }
+                },
             };
             // Make swell look different to wind
             var ausSwell = {
@@ -80,7 +80,6 @@ define(["require", "exports", "esri/views/MapView", "esri/Map", "esri/geometry/P
                     lineWidth: 10,
                     particleAge: 30,
                     particleMultiplier: 1,
-                    colorScale: ["#ffffff", "#e9ecfb", "#d3d9f7", "#bdc6f3", "#a7b3ef", "#91a0eb", "#7b8de7", "#657ae3", "#4f67df", "#3954db"]
                 }
             };
             // change up some display options to make it look different for global wind 2.

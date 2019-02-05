@@ -9,7 +9,7 @@ import * as Basemap from "esri/Basemap";
 import * as on from "dojo/on";
 import * as dom from "dojo/dom";
 import * as domClass from "dojo/dom-class";
-
+ 
 import { AnimatedEnvironmentLayer, DisplayOptions, PointReport } from "./animatedEnvironmentLayer";
  
 interface DataOption {
@@ -68,6 +68,7 @@ export class PageSetup {
             dom.byId("direction").innerHTML = rpt.degree ? rpt.degree.toFixed(1) : "n/a";
             dom.byId("speed").innerHTML = rpt.velocity ? rpt.velocity.toFixed(2) : "n/a";
         });
+        
     }
 
     private _dataChange(id) {
@@ -102,7 +103,8 @@ export class PageSetup {
                     particleMultiplier: 4,
                     zoomLevel: 4
                 }
-            } 
+            },
+            
         };
 
         // Make swell look different to wind
@@ -114,7 +116,8 @@ export class PageSetup {
                 lineWidth: 10,
                 particleAge: 30,
                 particleMultiplier: 1,
-                colorScale: ["#ffffff", "#e9ecfb", "#d3d9f7", "#bdc6f3", "#a7b3ef", "#91a0eb", "#7b8de7", "#657ae3", "#4f67df", "#3954db"]
+                //colorScale: ["#ffffff", "#e9ecfb", "#d3d9f7", "#bdc6f3", "#a7b3ef", "#91a0eb", "#7b8de7", "#657ae3", "#4f67df", "#3954db"]
+               
             }
         };
 
@@ -125,7 +128,7 @@ export class PageSetup {
             displayOptions: {
                 maxVelocity: 15,
                 particleMultiplier: 3
-            }
+            } 
         };
 
         this._dataOptions.push(globalWind);
