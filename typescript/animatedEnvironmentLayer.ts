@@ -27,30 +27,98 @@
 import * as MapView from "esri/views/MapView";
 import * as SceneView from "esri/views/SceneView";
 import * as GraphicsLayer from "esri/layers/GraphicsLayer";
-import * as promiseUtils from "esri/core/promiseUtils";
 import * as esriRequest from "esri/request";
 import * as Extent from "esri/geometry/Extent";
 import * as webMercatorUtils from "esri/geometry/support/webMercatorUtils";
 import * as watchUtils from "esri/core/watchUtils";
-import * as SpatialReference from "esri/geometry/SpatialReference";
 import * as Point from "esri/geometry/Point";
 import * as asd from "esri/core/accessorSupport/decorators";
-import * as query from "dojo/query";
+
+
+import BaseLayerView2D = require("esri/views/2d/layers/BaseLayerView2D");
+
+
+export type CustomFadeFunction = (context: CanvasRenderingContext2D, bounds: Bounds) => void;
+export type CustomDrawFunction = (context: CanvasRenderingContext2D, particles: Particle, colorStyle: string) => void;
+
+export interface DensityStop {
+    zoom: number;
+    density: number;
+}
 
 /** 
-    The available display options to chaneg the particle rendering
+    The available display options to change the particle rendering
 */
 export interface DisplayOptions {
+
+    /**
+     * Minimum velcity that will applied to a particle
+     * default: 0
+     * */
     minVelocity?: number;
+
+    /**
+     * Maimum velocity that will be applied to a particle
+     * default: 10
+     * */
     maxVelocity?: number;
+
+    /**
+     * Determines how quickly the particle moves based on it's velocity. Higher values mean faster moving.
+     * default: 0.005
+     * */
     velocityScale?: number;
+
+    /**
+     * The number of frames a particle will live for.
+     * default: 90
+     * */
     particleAge?: number;
-    particleLineWidth?: number;
-    particleMultiplier?: number;
-    particleMultiplierByZoom?: ParticleMultiplierByZoom,
+
+
+    /**
+     * The number of particles per 50x50 pixel block. If a number that density is applied across the board. If an array of density stops decalre the zoom level and density that would you like to apply.
+     * start with higher zoom first eg: [{ zoom: 2, density: 10 }, { zoom: 5, density: 8 }, {zoom: 6, density: 7}]
+     * the first being the zoom and 
+     * default: 10
+     * */
+    particleDensity?: number | DensityStop[];
+
+
+    /**
+     * The frame rate to use when animating. If the velocityScale parameter is higher then this will need to be increased to keep up with the required frames to draw the particles at a quicker speed. 
+     * If it's not a high enough value the animations could appear jumpy.
+     * default: 15
+     * */
     frameRate?: number;
+
+    /**
+     * An array of color values to use. Velocity values will be ampped o this color scale.
+     * default: ["rgb(61,160,247)", "rgb(99,164,217)", "rgb(138,168,188)", "rgb(177,173,158)", "rgb(216,177,129)", "rgb(255,182,100)", "rgb(240,145,87)", "rgb(225,109,74)", "rgb(210,72,61)", "rgb(195,36,48)", "rgb(180,0,35)"];
+     * */
     colorScale?: string[];
+
+    /**
+     * the width of the line for default rendering.
+     * default: 1
+     * */
     lineWidth?: number;
+
+    /**
+     * An amount to reduce particle numbers by on mobile devices
+     * default: (Math.pow(window.devicePixelRatio, 1 / 3) || 1.6)
+     * */
+    particleReduction?: number;
+
+    /** 
+     * A function that if exists will be called in the draw method that allows specific settings for a layer to be applied for the fading out part of the drawing. 
+     * */
+    customFadeFunction?: CustomFadeFunction; 
+
+    /**
+     * A function that if exists will be called to draw the particles. Allows for caller to have complete control over drawing. Will pass the context, particle object and the color style. 
+     * */
+    customDrawFunction?: CustomDrawFunction;
 }
 
 
@@ -93,6 +161,274 @@ export interface AnimatedEnvironmentLayerProperties extends __esri.GraphicsLayer
     reportValues?: boolean;
 }
 
+export interface Bounds {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    xMax: number;
+    yMax: number;
+}
+
+export interface Particle {
+    x?: number;
+    y?: number;
+    xt?: number;
+    yt?: number;
+    age?: number;
+    currentVector?: number[];
+}
+
+
+class AnimatedEnvironmentLayerView2D extends BaseLayerView2D {
+
+    layer: AnimatedEnvironmentLayer;
+    private viewState: __esri.ViewState;
+    private context: CanvasRenderingContext2D;
+
+    private drawing: boolean;
+    private drawPrepping: boolean;
+    private drawReady: boolean;
+
+    private southWest: Point;
+    private northEast: Point;
+
+    windy: Windy;
+    date: Date;
+
+    constructor(props) {
+        super();
+        this.view = props.view;
+        this.layer = <AnimatedEnvironmentLayer>props.layer;
+
+        this.view.on("resize", () => {
+            if (!this.context) return;
+
+            // resize the canvas
+            this.context.canvas.width = this.view.width;
+            this.context.canvas.height = this.view.height;
+        });
+
+
+        watchUtils.watch(this.layer, "visible", (nv, olv, pn, ta) => {
+            if (!nv) {
+                this.clear();
+            }
+            else {
+                this.prepDraw();
+            }
+        });
+
+    }
+
+
+    render(renderParameters) {
+
+        this.viewState = renderParameters.state;
+
+        if (!renderParameters.stationary) {
+            // not stationary so clear if drawn and set to prep again
+            if (this.drawing) {
+                this.clear();
+                this.drawing = false;
+            }
+            this.drawPrepping = false;
+            this.drawReady = false;
+            return;
+        }
+
+        if (!this.drawPrepping && !this.drawReady) { 
+            // prep the draw
+            this.drawPrepping = true;
+            if (this.windy && this.windy.gridData) {
+                this.prepDraw();
+            }
+            return;
+        }
+
+        if (this.drawReady) {
+
+            if (!this.drawing) {
+                // this.animationLoop(); // haven't started drawing so kick off our animation loop
+                this.startWindy();
+            }
+
+            // draw the custom context into this layers context
+            renderParameters.context.drawImage(this.context.canvas, 0, 0);
+            this.drawing = true;
+
+            // call request render so we copy the draw again
+            this.requestRender();
+        }
+    }
+
+    private startWindy() {
+
+        setTimeout(() => {
+
+            this.windy.start(
+                [[0, 0], [this.context.canvas.width, this.context.canvas.height]],
+                this.context.canvas.width,
+                this.context.canvas.height,
+                [[this.southWest.x, this.southWest.y], [this.northEast.x, this.northEast.y]]
+            );
+
+            this.setDate();
+
+        }, 500);
+
+    }
+
+    attach() {
+
+        // use attach to initilaize a custom canvas to draw on
+        // create the canvas, set some properties. 
+        let canvas = document.createElement("canvas");
+        canvas.id = "ael-" + Date.now();
+        canvas.style.position = "absolute";
+        canvas.style.top = "0";
+        canvas.style.left = "0";
+        canvas.width = this.view.width;
+        canvas.height = this.view.height;
+        let context = canvas.getContext("2d");
+        this.context = context;
+
+        this.initWindy();
+    }
+
+    /**
+     * Init the windy class 
+     * @param data
+     */
+    private initWindy(data?) {
+        this.windy = new Windy(
+            this.context.canvas,
+            this.layer.displayOptions,
+            undefined
+            );
+    }
+
+
+    clear(stopDraw: boolean = true) {
+
+        if (stopDraw) {
+            this.stopDraw();
+        }
+
+        if (this.context) {
+            this.context.clearRect(0, 0, this.view.width, this.view.height);
+        }
+    }
+
+    stopDraw() {
+        this.windy.stop();
+        this.drawing = false;
+    }
+
+
+    prepDraw(data?: any) {
+
+        if (data) this.windy.setData(data);
+
+        this.setParticleDensity();
+        this.startDraw();
+        this.drawPrepping = false;
+        this.drawReady = true;
+        this.requestRender();
+    }
+     
+
+    private startDraw() {
+
+        // use the extent of the view, and not the extent passed into fetchImage...it was slightly off when it crossed IDL.
+        let extent = this.view.extent;
+        if (extent.spatialReference.isWebMercator) {
+            extent = <Extent>webMercatorUtils.webMercatorToGeographic(extent);
+        }
+
+        this.northEast = new Point({ x: extent.xmax, y: extent.ymax });
+        this.southWest = new Point({ x: extent.xmin, y: extent.ymin });
+
+        // resize the canvas
+        this.context.canvas.width = this.view.width;
+        this.context.canvas.height = this.view.height;
+
+        // cater for the extent crossing the IDL
+        if (this.southWest.x > this.northEast.x && this.northEast.x < 0) {
+            this.northEast.x = 360 + this.northEast.x;
+        }
+
+    }
+
+
+    private setParticleDensity() {
+        if (!Array.isArray(this.layer.displayOptions.particleDensity)) {
+            return; // not an array, so must be a number, exit out here as there's no calc to do
+        }
+
+        let stops = this.layer.displayOptions.particleDensity;
+        let currentZoom = Math.round(this.view.zoom);
+        let density = -1;
+
+        let zoomMap = stops.map((stop) => {
+            return stop.zoom;
+        });
+
+        // loop the zooms 
+
+        for (let i = 0; i < stops.length; i++) {
+            let stop = stops[i];
+
+            if (stop.zoom === currentZoom) {
+                density = stop.density;
+                break;
+            }
+
+            let nextStop = i + 1 < stops.length ? stops[i + 1] : undefined;
+            if (!nextStop) {
+                // this is the last one, so just set to this value
+                density = stop.density;
+                break;
+            }
+
+            if (nextStop.zoom > currentZoom) {
+                density = stop.density;
+                break;
+            }
+
+        }
+
+        // if density still not found, set it to the last value in the stops array
+        if (density === -1) {
+            density = stops[stops.length - 1].density;
+        }
+
+        this.windy.calculatedDensity = density;
+
+    }
+
+    private setDate() {
+        if (this.windy) {
+            if (this.windy.refTime && this.windy.forecastTime) {
+
+                // assume the ref time is an iso string, or some other equivalent that javascript Date object can parse.
+                let d = new Date(this.windy.refTime);
+
+                // add the forecast time as hours to the refTime;
+                d.setHours(d.getHours() + this.windy.forecastTime);
+                this.date = d;
+                return;
+            }
+        }
+
+        this.date = undefined;
+    }
+
+}
+
+
+
+
 @asd.subclass("AnimatedEnvironmentLayer")
 export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
 
@@ -111,47 +447,52 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     @asd.property()
     isErrored: boolean;
 
-    private _windy: Windy;
-    private _dataFetchRequired: boolean;
-
-    private _canvas2d: HTMLCanvasElement;
-    private _canvas3d: HTMLCanvasElement;
-
-    private _layerView2d: any;
-    private _layerView3d: any;
-
-    private _southWest: Point;
-    private _northEast: Point;
-
-    private _activeView: MapView | SceneView;
-    private _viewLoadCount: number = 0;
-
-    private _isDrawing: boolean = false;
-    private _queuedDraw: boolean;
-
-
-    date: Date;
+    private dataFetchRequired: boolean;
+    layerView: AnimatedEnvironmentLayerView2D;
 
     constructor(properties: AnimatedEnvironmentLayerProperties) {
         super(properties);
 
         // If the active view is set in properties, then set it here.
-        this._activeView = properties.activeView;
         this.url = properties.url;
         this.displayOptions = properties.displayOptions || {};
-        this.reportValues = properties.reportValues === false ? false : true; // default to true
+        if (Array.isArray(this.displayOptions.particleDensity)) {
 
-        this.on("layerview-create", (evt) => this._layerViewCreated(evt));
+            // make sure the particle density stops array is is order by zoom level lowest zooms first
+            this.displayOptions.particleDensity.sort((a, b) => {
+                return a.zoom - b.zoom;
+            });
+        }
+
+
+        this.reportValues = properties.reportValues === false ? false : true; // default to true
 
         // watch url prop so a fetch of data and redraw will occur.
         watchUtils.watch(this, "url", (a, b, c, d) => this._urlChanged(a, b, c, d));
 
-        // watch url prop so a fetch of data and redraw will occur.
+        // watch visible so a fetch of data and redraw will occur.
         watchUtils.watch(this, "visible", (a, b, c, d) => this._visibleChanged(a, b, c, d));
 
         // watch display options so to redraw when changed.
         watchUtils.watch(this, "displayOptions", (a, b, c, d) => this._displayOptionsChanged(a, b, c, d));
-        this._dataFetchRequired = true;
+        this.dataFetchRequired = true;
+    }
+
+
+    private createLayerView(view: __esri.MapView | __esri.SceneView) {
+
+        // only supports 2d right now.
+        if (view.type !== "2d") return;
+
+        // hook up the AnimatedEnvironmentLayerView2D as the layer view
+        this.layerView = new AnimatedEnvironmentLayerView2D({
+            view: view,
+            layer: this
+        });
+
+        this.layerView.view.on("pointer-move", (evt) => this.viewPointerMove(evt));
+        this.draw(true);
+        return this.layerView;
     }
 
     /**
@@ -160,247 +501,66 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     draw(forceDataRefetch?: boolean) {
 
         if (forceDataRefetch != null) {
-            this._dataFetchRequired = forceDataRefetch;
+            this.dataFetchRequired = forceDataRefetch;
         }
 
         if (!this.url || !this.visible) return; // no url set, not visible or is currently drawing, exit here.
 
-        this._isDrawing = true;
-        this._setupDraw(this._activeView.width, this._activeView.height);
-
         // if data should be fetched, go get it now.
-        if (this._dataFetchRequired) {
+        if (this.dataFetchRequired) {
             this.isErrored = false;
             this.dataLoading = true;
 
             esriRequest(this.url, {
                 responseType: "json"
             })
-            .then((response) => {
-                this._dataFetchRequired = false;
-                this._windy.setData(response.data)
-                this._doDraw(); // all sorted draw now.
-                this.dataLoading = false;
-            })
-            .otherwise((err) => {
-                console.error("Error occurred retrieving data. " + err);
-                this.dataLoading = false;
-                this.isErrored = true;
-            });
+                .then((response) => {
+                    this.dataFetchRequired = false;
+                    this.doDraw(response.data); // all sorted draw now.
+                    this.dataLoading = false;
+                })
+                .otherwise((err) => {
+                    console.error("Error occurred retrieving data. " + err);
+                    this.dataLoading = false;
+                    this.isErrored = true;
+                });
         }
         else {
             // no need for data, just draw.
-            this._doDraw();
+            this.doDraw();
 
         }
     }
 
-    /**
-     * Update the active view. The view must have been assigned to the map previously so that this layer has created or used the canvas element in layerview created already.
-     * @param view
-     */
-    setView(view: MapView | SceneView) {
-        this._activeView = view;
-        this.draw();
-    }
 
     stop() {
-        if (this._windy) {
-            this._windy.stop();
+        if (this.layerView) {
+            this.layerView.stopDraw();
         }
     }
 
     start() {
-        this.draw();
-    }
-
-
-    /**
-     * Is the active view 2d.
-     */
-    private _is2d() {
-        return this._activeView ? this._activeView.type === "2d" : false;
+        this.doDraw();
     }
 
     /**
      * Call the windy draw method
      */
-    private _doDraw() {
-        setTimeout(() => {
-            if (this._is2d()) {
-                this._windy.start(
-                    [[0, 0], [this._canvas2d.width, this._canvas2d.height]],
-                    this._canvas2d.width,
-                    this._canvas2d.height,
-                    [[this._southWest.x, this._southWest.y], [this._northEast.x, this._northEast.y]]
-                );
-
-                this._setDate();
-
-                this._isDrawing = false;
-
-                // if we have a queued draw do it right now.
-                if (this._queuedDraw) {
-                    this._queuedDraw = false;
-                    this.draw();
-                }
-            }
-        }, 500);
-    }
-
-    /**
-     * Init the windy class 
-     * @param data
-     */
-    private _initWindy(data?) {
-        if (this._is2d()) {
-            this._windy = new Windy(
-                this._canvas2d,
-                undefined,
-                this.displayOptions);
-        }
-    }
-
-    /**
-     * Setup the geo bounds of the drawing area
-     * @param width
-     * @param height
-     */
-    private _setupDraw(width: number, height: number) {
-
-        // use the extent of the view, and not the extent passed into fetchImage...it was slightly off when it crossed IDL.
-        let extent = this._activeView.extent;
-        if (extent.spatialReference.isWebMercator) {
-            extent = <Extent>webMercatorUtils.webMercatorToGeographic(extent);
-        }
-
-        this._northEast = new Point({ x: extent.xmax, y: extent.ymax });
-        this._southWest = new Point({ x: extent.xmin, y: extent.ymin });
-
-        if (this._is2d()) {
-            this._canvas2d.width = width;
-            this._canvas2d.height = height;
-            // cater for the extent crossing the IDL
-            if (this._southWest.x > this._northEast.x && this._northEast.x < 0) {
-                this._northEast.x = 360 + this._northEast.x;
-            }
-        }
-    }
-
-    /**
-     * Handle layer view created.
-     * @param evt
-     */
-    private _layerViewCreated(evt) {
-        // set the active view to the first view loaded if there wasn't one included in the constructor properties.
-        this._viewLoadCount++;
-        if (this._viewLoadCount === 1 && !this._activeView) {
-            this._activeView = evt.layerView.view;
-        }
-
-        if (this._is2d()) {
-            this._layerView2d = evt.layerView;
-            // for map views, wait for the layerview to be attached
-            watchUtils.whenTrueOnce(evt.layerView, "attached", () => this._createCanvas(evt.layerView));
-        }
-        else {
-            this._layerView3d = evt.layerView;
-            this._createCanvas(evt.layerView);
-        }
-        watchUtils.pausable(evt.layerView.view, "stationary", (isStationary, b, c, view) => this._viewStationary(isStationary, b, c, view));
-
-        if (this.reportValues === true) {
-            evt.layerView.view.on("pointer-move", (evt) => this._viewPointerMove(evt));
-        }
-
-    }
-
-    /**
-     * Create or assign a canvas element for use in drawing.
-     * @param layerView
-     */
-    private _createCanvas(layerView) {
-        if (this._is2d()) {
-            // For a map view get the container element of the layer view and add a canvas to it.
-            this._canvas2d = document.createElement("canvas");
-            layerView.container.element.appendChild(this._canvas2d);
-
-            // default some styles 
-            this._canvas2d.style.position = "absolute";
-            this._canvas2d.style.left = "0";
-            this._canvas2d.style.top = "0";
-        }
-        else {
-            // Handle scene view canvas in future.            
-        }
-
-        // setup windy once the canvas has been created
-        this._initWindy();
+    private doDraw(data?: any) {
+        this.layerView.prepDraw(data);
     }
 
 
-    /**
-     * view stationary handler, clear canvas or force a redraw
-     */
-    private _viewStationary(isStationary, b, c, view) {
-        if (!this._activeView) return;
-
-        if (!isStationary) {
-            if (this._windy) {
-                if (this._is2d()) {
-                    this._windy.stop(); // force a stop of windy when view is moving
-                    this._canvas2d.getContext("2d").clearRect(0, 0, this._activeView.width, this._activeView.height);
-                }
-            }
-        }
-        else {
-            if (this._isDrawing) {
-                this._queuedDraw = true;
-            }
-            else {
-
-                if (this.displayOptions.particleMultiplierByZoom) {
-                    this._setParticleMultiplier();
-                }
-
-                this.draw();
-            }
-        }
-    }
-
-    private _setParticleMultiplier() {
-        let currentZoom = this._activeView.zoom;
-        let baseZoom = this.displayOptions.particleMultiplierByZoom.zoomLevel;
-        let pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier;
-
-        if (currentZoom > baseZoom) {
-            let zoomDiff = (currentZoom - baseZoom);
-            pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier - (zoomDiff * this.displayOptions.particleMultiplierByZoom.diffRatio);
-        }
-        else if (currentZoom < baseZoom) {
-            let zoomDiff = baseZoom - currentZoom;
-            pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier + (zoomDiff * this.displayOptions.particleMultiplierByZoom.diffRatio);
-        }
-
-        if (pm < this.displayOptions.particleMultiplierByZoom.minMultiplier) pm = this.displayOptions.particleMultiplierByZoom.minMultiplier;
-        else if (pm > this.displayOptions.particleMultiplierByZoom.maxMultiplier) pm = this.displayOptions.particleMultiplierByZoom.maxMultiplier;
-
-        if (this._is2d() && this._windy) {
-            this._windy.PARTICLE_MULTIPLIER = pm;
-        }
-
-    }
-
-    private _viewPointerMove(evt) {
-        if (!this._windy || !this.visible) return;
+    private viewPointerMove(evt) {
+        if (!this.layerView.windy || !this.visible) return;
 
         let mousePos = this._getMousePos(evt);
-        let point = this._activeView.toMap({ x: mousePos.x, y: mousePos.y });
+        let point = this.layerView.view.toMap({ x: mousePos.x, y: mousePos.y });
         if (point.spatialReference.isWebMercator) {
             point = <Point>webMercatorUtils.webMercatorToGeographic(point);
         }
 
-        let grid = this._windy.interpolate(point.x, point.y);
+        let grid = this.layerView.windy.interpolate(point.x, point.y);
         let result: PointReport = {
             point: point,
             target: this
@@ -449,7 +609,7 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
 
     private _getMousePos(evt) {
         // container on the view is actually a html element at this point, not a string as the typings suggest.
-        let container: any = this._activeView.container;
+        let container: any = this.layerView.view.container;
         let rect = container.getBoundingClientRect();
         return {
             x: evt.x - rect.left,
@@ -462,17 +622,17 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
      * Watch of the url property - call draw again with a refetch
      */
     private _urlChanged(a, b, c, d) {
-        if (this._windy) this._windy.stop();
-        this._dataFetchRequired = true;
+        this.stop();
+        this.dataFetchRequired = true;
         this.draw();
     }
 
     /**
-     * Watch of the url property - call draw again with a refetch
+     * Watch of the visible property - stop and start depending on value
      */
     private _visibleChanged(visible, b, c, d) {
         if (!visible) {
-            if (this._windy) this._windy.stop();
+            this.stop();
         }
         else {
             this.draw();
@@ -484,28 +644,13 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
      * Watch of displayOptions - call draw again with new options set on windy.
      */
     private _displayOptionsChanged(newOptions, b, c, d) {
-        if (!this._windy) return;
-        this._windy.stop();
-        this._windy.setDisplayOptions(newOptions);
+        if (!this.layerView.windy) return;
+
+        this.layerView.windy.stop();
+        this.layerView.windy.setDisplayOptions(newOptions);
         this.draw();
     }
 
-    private _setDate() {
-        if (this._is2d() && this._windy) {
-            if (this._windy.refTime && this._windy.forecastTime) {
-
-                // assume the ref time is an iso string, or some other equivalent that javascript Date object can parse.
-                let d = new Date(this._windy.refTime);
-
-                // add the forecast time as hours to the refTime;
-                d.setHours(d.getHours() + this._windy.forecastTime);
-                this.date = d;
-                return;
-            }
-        }
-
-        this.date = undefined;
-    }
 }
 
 
@@ -522,15 +667,11 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
  */
 class Windy {
 
-    MIN_VELOCITY_INTENSITY: number;
-    MAX_VELOCITY_INTENSITY: number;
-    VELOCITY_SCALE: number;
-    MAX_PARTICLE_AGE: number;
-    PARTICLE_LINE_WIDTH: number;
-    PARTICLE_MULTIPLIER: number;
-    PARTICLE_REDUCTION: number;
-    FRAME_RATE: number;
+    displayOptions: DisplayOptions;
+    calculatedDensity: number;
+
     FRAME_TIME: number;
+
     colorScale: any;
     canvas: HTMLCanvasElement;
 
@@ -546,20 +687,18 @@ class Windy {
     grid;
     gridData: any;
     date;
-    λ0;
-    φ0;
-    Δλ;
-    Δφ;
+    lo1;
+    la1;
+    dx;
+    dy;
     ni;
     nj;
 
     private _scanMode: number;
-    private _dynamicParticleMultiplier: boolean;
 
-    constructor(canvas: HTMLCanvasElement, data?: any, options?: DisplayOptions) {
+    constructor(canvas: HTMLCanvasElement, options: DisplayOptions, data?: any) {
 
         this.canvas = canvas;
-        if (!options) options = {};
         this.setDisplayOptions(options);
         this.gridData = data;
 
@@ -570,21 +709,28 @@ class Windy {
     }
 
     setDisplayOptions(options: DisplayOptions) {
-        this.MIN_VELOCITY_INTENSITY = options.minVelocity || 0; // velocity at which particle intensity is minimum (m/s)
-        this.MAX_VELOCITY_INTENSITY = options.maxVelocity || 10; // velocity at which particle intensity is maximum (m/s)
-        this.VELOCITY_SCALE = (options.velocityScale || 0.005) * (Math.pow(window.devicePixelRatio, 1 / 3) || 1); // scale for wind velocity (completely arbitrary--this value looks nice)
-        this.MAX_PARTICLE_AGE = options.particleAge || 90; // max number of frames a particle is drawn before regeneration
-        this.PARTICLE_LINE_WIDTH = options.lineWidth || 1; // line width of a drawn particle
 
-        // default particle multiplier to 2
-        this.PARTICLE_MULTIPLIER = options.particleMultiplier || 2;
+        this.displayOptions = options;
 
-        this.PARTICLE_REDUCTION = Math.pow(window.devicePixelRatio, 1 / 3) || 1.6; // multiply particle count for mobiles by this amount
-        this.FRAME_RATE = options.frameRate || 15;
-        this.FRAME_TIME = 1000 / this.FRAME_RATE; // desired frames per second
+        // setup some defaults
+        this.displayOptions.minVelocity = this.displayOptions.minVelocity || 0;
+        this.displayOptions.maxVelocity = this.displayOptions.maxVelocity || 10;
+        this.displayOptions.particleDensity = this.displayOptions.particleDensity || 10;
+
+        this.calculatedDensity = Array.isArray(this.displayOptions.particleDensity) ? 10 : this.displayOptions.particleDensity;
+
+
+        this.displayOptions.velocityScale = (this.displayOptions.velocityScale || 0.005) * (Math.pow(window.devicePixelRatio, 1 / 3) || 1); // scale for velocity (completely arbitrary -- this value looks nice)
+        this.displayOptions.particleAge = this.displayOptions.particleAge || 90;
+        this.displayOptions.lineWidth = this.displayOptions.lineWidth || 1;
+        this.displayOptions.particleReduction = this.displayOptions.particleReduction || (Math.pow(window.devicePixelRatio, 1 / 3) || 1.6); // multiply particle count for mobiles by this amount
+        this.displayOptions.frameRate = this.displayOptions.frameRate || 15; 
 
         var defaultColorScale = ["rgb(61,160,247)", "rgb(99,164,217)", "rgb(138,168,188)", "rgb(177,173,158)", "rgb(216,177,129)", "rgb(255,182,100)", "rgb(240,145,87)", "rgb(225,109,74)", "rgb(210,72,61)", "rgb(195,36,48)", "rgb(180,0,35)"];
-        this.colorScale = options.colorScale || defaultColorScale;
+        this.colorScale = this.displayOptions.colorScale || defaultColorScale;
+
+        this.FRAME_TIME = 1000 / this.displayOptions.frameRate; // desired frames per second
+
     }
 
     start(bounds, width, height, extent) {
@@ -618,20 +764,20 @@ class Windy {
 
     /**
     * Get interpolated grid value from Lon/Lat position
-   * @param λ {Float} Longitude
-   * @param φ {Float} Latitude
+   * @param lon {Float} Longitude
+   * @param lat {Float} Latitude
    * @returns {Object}
    */
-    interpolate(λ, φ) {
+    interpolate(lon, lat) {
 
         if (!this.grid) return null;
 
-        let i = this.floorMod(λ - this.λ0, 360) / this.Δλ; // calculate longitude index in wrapped range [0, 360)
-        let j = (this.φ0 - φ) / this.Δφ; // calculate latitude index in direction +90 to -90
+        let i = this.floorMod(lon - this.lo1, 360) / this.dx; // calculate longitude index in wrapped range [0, 360)
+        let j = (this.la1 - lat) / this.dy; // calculate latitude index in direction +90 to -90
 
         if (this._scanMode === 64) {
             // calculate latitude index in direction -90 to +90 as this is scan mode 64
-            j = (φ - this.φ0) / this.Δφ;
+            j = (lat - this.la1) / this.dy;
             j = this.grid.length - j;
         }
 
@@ -662,11 +808,11 @@ class Windy {
         this.builder = this.createBuilder(data);
         var header = this.builder.header;
 
-        this.λ0 = header.lo1;
-        this.φ0 = header.la1; // the grid's origin (e.g., 0.0E, 90.0N)
+        this.lo1 = header.lo1;
+        this.la1 = header.la1; // the grid's origin (e.g., 0.0E, 90.0N)
 
-        this.Δλ = header.dx;
-        this.Δφ = header.dy; // distance between grid points (e.g., 2.5 deg lon, 2.5 deg lat)
+        this.dx = header.dx;
+        this.dy = header.dy; // distance between grid points (e.g., 2.5 deg lon, 2.5 deg lat)
 
         this.ni = header.nx;
         this.nj = header.ny; // number of grid points W-E and N-S (e.g., 144 x 73)
@@ -678,7 +824,7 @@ class Windy {
 
         this.grid = [];
         var p = 0;
-        var isContinuous = Math.floor(this.ni * this.Δλ) >= 360;
+        var isContinuous = Math.floor(this.ni * this.dx) >= 360;
 
         if (header.scanMode === 0) {
             // Scan mode 0. Longitude increases from λ0, and latitude decreases from φ0.
@@ -743,9 +889,9 @@ class Windy {
                 case "0,2,0":
                     directionTrue = record; //waves and wind direction
                     break;
-                case "10,0,8": 
+                case "10,0,8":
                 case "10,0,3":
-                case "0,2,1": 
+                case "0,2,1":
                     magnitude = record; //waves and wind height
                     break;
                 default:
@@ -810,14 +956,21 @@ class Windy {
     }
 
 
-    private buildBounds(bounds, width, height) {
+    private buildBounds(bounds, width, height) : Bounds {
         let upperLeft = bounds[0];
         let lowerRight = bounds[1];
         let x = Math.round(upperLeft[0]);
         let y = Math.max(Math.floor(upperLeft[1]), 0);
         let xMax = Math.min(Math.ceil(lowerRight[0]), width - 1);
         let yMax = Math.min(Math.ceil(lowerRight[1]), height - 1);
-        return { x: x, y: y, xMax: width, yMax: yMax, width: width, height: height };
+        return {
+            x: x,
+            y: y,
+            xMax: xMax,
+            yMax: yMax,
+            width: width,
+            height: height
+        };
     }
 
 
@@ -875,10 +1028,10 @@ class Windy {
     * Calculate distortion of the wind vector caused by the shape of the projection at point (x, y). The wind
     * vector is modified in place and returned by this function.
     */
-    private distort(projection, λ, φ, x, y, scale, wind, windy) {
+    private distort(projection, lon, lat, x, y, scale, wind, windy) {
         var u = wind[0] * scale;
         var v = wind[1] * scale;
-        var d = this.distortion(projection, λ, φ, x, y, windy);
+        var d = this.distortion(projection, lon, lat, x, y, windy);
 
         // Scale distortion vectors by u and v, then add.
         wind[0] = d[0] * u + d[2] * v;
@@ -886,19 +1039,19 @@ class Windy {
         return wind;
     }
 
-    private distortion(projection, λ, φ, x, y, windy) {
-        let τ = 2 * Math.PI;
+    private distortion(projection, lon, lat, x, y, windy) {
+        let tau = 2 * Math.PI;
         let H = Math.pow(10, -5.2);
-        let hλ = λ < 0 ? H : -H;
-        let hφ = φ < 0 ? H : -H;
+        let hLon = lon < 0 ? H : -H;
+        let hLat = lat < 0 ? H : -H;
 
-        let pλ = this.project(φ, λ + hλ, windy);
-        let pφ = this.project(φ + hφ, λ, windy);
+        let pLon = this.project(lat, lon + hLon, windy);
+        let pLat = this.project(lat + hLat, lon, windy);
 
         // Meridian scale factor (see Snyder, equation 4-3), where R = 1. This handles issue where length of 1º λ
         // changes depending on φ. Without this, there is a pinching effect at the poles.
-        let k = Math.cos(φ / 360 * τ);
-        return [(pλ[0] - x) / hλ / k, (pλ[1] - y) / hλ / k, (pφ[0] - x) / hφ, (pφ[1] - y) / hφ];
+        let k = Math.cos(lat / 360 * tau);
+        return [(pLon[0] - x) / hLon / k, (pLon[1] - y) / hLon / k, (pLat[0] - x) / hLat, (pLat[1] - y) / hLat];
     }
 
     private mercY(lat) {
@@ -931,11 +1084,11 @@ class Windy {
     }
 
 
-    private interpolateField(grid, bounds, extent, callback) {
+    private interpolateField(grid, bounds: Bounds, extent, callback) {
 
         let projection = {};
         let mapArea = (extent.south - extent.north) * (extent.west - extent.east);
-        let velocityScale = this.VELOCITY_SCALE * Math.pow(mapArea, 0.4);
+        let velocityScale = this.displayOptions.velocityScale * Math.pow(mapArea, 0.4);
 
         let columns = [];
         let x = bounds.x;
@@ -945,13 +1098,12 @@ class Windy {
             for (let y = bounds.y; y <= bounds.yMax; y += 2) {
                 let coord = this.invert(x, y, extent);
                 if (coord) {
-                    var λ = coord[0],
-                        φ = coord[1];
-                    if (isFinite(λ)) {
-                        //let wind = grid.interpolate(λ, φ);
-                        let wind = this.interpolate(λ, φ);
+                    var lon = coord[0],
+                        lat = coord[1];
+                    if (isFinite(lon)) {
+                        let wind = this.interpolate(lon, lat);
                         if (wind) {
-                            wind = this.distort(projection, λ, φ, x, y, velocityScale, wind, extent);
+                            wind = this.distort(projection, lon, lat, x, y, velocityScale, wind, extent);
                             column[y + 1] = column[y] = wind;
                         }
                     }
@@ -977,7 +1129,7 @@ class Windy {
     }
 
 
-    private createField(columns, bounds, callback) {
+    private createField(columns, bounds: Bounds, callback) {
 
         /**
         * @returns {Array} wind vector [u, v, magnitude] at the point (x, y), or [NaN, NaN, null] if wind
@@ -994,10 +1146,10 @@ class Windy {
             columns = [];
         };
 
-        field.randomize = (o) => {
+        field.randomize = (o: Particle) => {
             // UNDONE: this method is terrible
-            var x, y;
-            var safetyNet = 0;
+            let x, y;
+            let safetyNet = 0;
             do {
                 x = Math.round(Math.floor(Math.random() * bounds.width) + bounds.x);
                 y = Math.round(Math.floor(Math.random() * bounds.height) + bounds.y);
@@ -1010,7 +1162,7 @@ class Windy {
         callback(bounds, field);
     }
 
-    private animate(bounds, field) {
+    private animate(bounds: Bounds, field) {
 
         let windIntensityColorScale = (min, max) => {
             this.colorScale.indexFor = (m) => {
@@ -1020,37 +1172,40 @@ class Windy {
             return this.colorScale;
         }
 
-        let colorStyles = windIntensityColorScale(this.MIN_VELOCITY_INTENSITY, this.MAX_VELOCITY_INTENSITY);
+        let colorStyles = windIntensityColorScale(this.displayOptions.minVelocity, this.displayOptions.maxVelocity);
         let buckets = colorStyles.map(function () {
             return [];
         });
 
-        let particleCount = Math.round(bounds.width * bounds.height * this.PARTICLE_MULTIPLIER / 1000);
+        // based on the density setting, add that many per 50px x 50px
+        let densityRatio = 50 * window.devicePixelRatio;
+        let densityMultiplier = (bounds.width / densityRatio) * (bounds.height / densityRatio);
+        let particleCount = Math.ceil(this.calculatedDensity * densityMultiplier);
+
         if (this.isMobile()) {
-            particleCount *= this.PARTICLE_REDUCTION;
+            particleCount *= this.displayOptions.particleReduction;
         }
 
-        let fadeFillStyle = "rgba(0, 0, 0, 0.97)";
-
-        let particles = [];
+        let particles: Particle[] = [];
         for (let i = 0; i < particleCount; i++) {
-            particles.push(field.randomize({ age: Math.floor(Math.random() * this.MAX_PARTICLE_AGE) + 0 }));
+            particles.push(field.randomize({ age: Math.floor(Math.random() * this.displayOptions.particleAge) + 0 }));
         }
 
         let evolve = () => {
-            buckets.forEach((bucket) => {
+            buckets.forEach((bucket: Particle[]) => {
                 bucket.length = 0;
             });
             particles.forEach((particle) => {
-                if (particle.age > this.MAX_PARTICLE_AGE) {
+                if (particle.age > this.displayOptions.particleAge) {
                     field.randomize(particle).age = 0;
                 }
                 var x = particle.x;
                 var y = particle.y;
                 var v = field(x, y); // vector at current position
                 var m = v[2];
+                particle.currentVector = v;
                 if (m === null) {
-                    particle.age = this.MAX_PARTICLE_AGE; // particle has escaped the grid, never to return...
+                    particle.age = this.displayOptions.particleAge; // particle has escaped the grid, never to return...
                 } else {
                     var xt = x + v[0];
                     var yt = y + v[1];
@@ -1070,30 +1225,51 @@ class Windy {
         }
 
         let g = this.canvas.getContext("2d");
-        g.lineWidth = this.PARTICLE_LINE_WIDTH;
+
+        let fadeFillStyle = "rgba(0, 0, 0, 0.97)";
         g.fillStyle = fadeFillStyle;
         g.globalAlpha = 0.6;
 
         let draw = () => {
-            // Fade existing particle trails.
-            let prev = "lighter";
-            g.globalCompositeOperation = "destination-in";
-            g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
-            g.globalCompositeOperation = prev;
-            g.globalAlpha = 0.9;
 
+            if (!this.displayOptions.customFadeFunction) {
+                // Fade existing particle trails - using the default settings
+                g.globalCompositeOperation = "destination-in";
+                g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+                g.globalCompositeOperation = "lighter";
+                g.globalAlpha = 0.95;
+            }
+            else {
+                // call the custom function provided by the caller so they can control fade out completely.
+                this.displayOptions.customFadeFunction(g, bounds);
+            }
+            
             // Draw new particle trails.
-            buckets.forEach((bucket, i) => {
+            buckets.forEach((bucket: Particle[], i) => {
                 if (bucket.length > 0) {
-                    g.beginPath();
-                    g.strokeStyle = colorStyles[i];
-                    bucket.forEach((particle) => {
-                        g.moveTo(particle.x, particle.y);
-                        g.lineTo(particle.xt, particle.yt);
-                        particle.x = particle.xt;
-                        particle.y = particle.yt;
-                    });
-                    g.stroke();
+
+                    if (!this.displayOptions.customDrawFunction) {
+                        // default drawing, draw a line
+                        g.beginPath();
+                        g.strokeStyle = colorStyles[i];
+                        bucket.forEach((particle) => {
+                            g.lineWidth = this.displayOptions.lineWidth;
+                            g.moveTo(particle.x, particle.y);
+                            g.lineTo(particle.xt, particle.yt);
+                            particle.x = particle.xt;
+                            particle.y = particle.yt;
+
+                        });
+                        g.stroke();
+                    }
+                    else {
+                        // custom draw function specified, so pass each particle to it and then update the particle position
+                        bucket.forEach((particle) => {
+                            this.displayOptions.customDrawFunction(g, particle, colorStyles[i]);
+                            particle.x = particle.xt;
+                            particle.y = particle.yt;
+                        });
+                    }
                 }
             });
         }
