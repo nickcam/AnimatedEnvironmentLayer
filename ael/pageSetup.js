@@ -60,15 +60,7 @@ define(["require", "exports", "esri/views/MapView", "esri/Map", "esri/geometry/P
                 url: "./data/global-wind.json",
                 id: "Global wind",
                 displayOptions: {
-                    maxVelocity: 15,
-                    // make the particle multipliers change depending on zoom level
-                    particleMultiplierByZoom: {
-                        diffRatio: 0.4,
-                        maxMultiplier: 5,
-                        minMultiplier: 0.2,
-                        particleMultiplier: 4,
-                        zoomLevel: 4
-                    }
+                    maxVelocity: 15
                 },
             };
             // Make swell look different to wind
@@ -79,7 +71,6 @@ define(["require", "exports", "esri/views/MapView", "esri/Map", "esri/geometry/P
                     maxVelocity: 5,
                     lineWidth: 10,
                     particleAge: 30,
-                    particleMultiplier: 1,
                 }
             };
             // change up some display options to make it look different for global wind 2.
@@ -88,7 +79,11 @@ define(["require", "exports", "esri/views/MapView", "esri/Map", "esri/geometry/P
                 id: "Global wind 2",
                 displayOptions: {
                     maxVelocity: 15,
-                    particleMultiplier: 3
+                    velocityScale: 0.01,
+                    frameRate: 30,
+                    particleDensity: [{ zoom: 2, density: 10 }, { zoom: 4, density: 9 }, { zoom: 8, density: 6 }, { zoom: 10, density: 4 }, { zoom: 12, density: 3 }],
+                    customFadeFunction: this.customFadeFunction,
+                    customDrawFunction: this.customDrawFunction // a custom draw function
                 }
             };
             this._dataOptions.push(globalWind);
@@ -101,6 +96,23 @@ define(["require", "exports", "esri/views/MapView", "esri/Map", "esri/geometry/P
                 element.innerHTML = opt.id;
                 select.appendChild(element);
             });
+        };
+        PageSetup.prototype.customDrawFunction = function (context, particle, colorStyle) {
+            // draw a circle and make the radius a factor of the magnitude
+            var radius = particle.currentVector[2] / 9;
+            context.beginPath();
+            context.fillStyle = colorStyle;
+            context.arc(particle.x, particle.y, radius, 0, 2 * Math.PI);
+            context.fill();
+        };
+        PageSetup.prototype.customFadeFunction = function (context, bounds) {
+            // Fade existing particle trails
+            context.globalCompositeOperation = "destination-in";
+            context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+            context.globalCompositeOperation = "lighter";
+            context.globalAlpha = 0.95;
+            // perhaps you don't want a trail and just want it cleared between each frame - then just use the below line.
+            //context.clearRect(bounds.x, bounds.y, bounds.width, bounds.height);
         };
         PageSetup.prototype._basemapChange = function (id) {
             var bm = Basemap.fromId(id);

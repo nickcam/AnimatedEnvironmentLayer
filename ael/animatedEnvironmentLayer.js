@@ -74,7 +74,7 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             if (!this.drawPrepping && !this.drawReady) {
                 // prep the draw
                 this.drawPrepping = true;
-                if (this.windy.gridData) {
+                if (this.windy && this.windy.gridData) {
                     this.prepDraw();
                 }
                 return;
@@ -135,6 +135,7 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
         AnimatedEnvironmentLayerView2D.prototype.prepDraw = function (data) {
             if (data)
                 this.windy.setData(data);
+            this.setParticleDensity();
             this.startDraw();
             this.drawPrepping = false;
             this.drawReady = true;
@@ -155,6 +156,40 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             if (this.southWest.x > this.northEast.x && this.northEast.x < 0) {
                 this.northEast.x = 360 + this.northEast.x;
             }
+        };
+        AnimatedEnvironmentLayerView2D.prototype.setParticleDensity = function () {
+            if (!Array.isArray(this.layer.displayOptions.particleDensity)) {
+                return; // not an array, so must be a number, exit out here as there's no calc to do
+            }
+            var stops = this.layer.displayOptions.particleDensity;
+            var currentZoom = Math.round(this.view.zoom);
+            var density = -1;
+            var zoomMap = stops.map(function (stop) {
+                return stop.zoom;
+            });
+            // loop the zooms 
+            for (var i = 0; i < stops.length; i++) {
+                var stop_1 = stops[i];
+                if (stop_1.zoom === currentZoom) {
+                    density = stop_1.density;
+                    break;
+                }
+                var nextStop = i + 1 < stops.length ? stops[i + 1] : undefined;
+                if (!nextStop) {
+                    // this is the last one, so just set to this value
+                    density = stop_1.density;
+                    break;
+                }
+                if (nextStop.zoom > currentZoom) {
+                    density = stop_1.density;
+                    break;
+                }
+            }
+            // if density still not found, set it to the last value in the stops array
+            if (density === -1) {
+                density = stops[stops.length - 1].density;
+            }
+            this.windy.calculatedDensity = density;
         };
         AnimatedEnvironmentLayerView2D.prototype.setDate = function () {
             if (this.windy) {
@@ -178,10 +213,16 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             // If the active view is set in properties, then set it here.
             _this.url = properties.url;
             _this.displayOptions = properties.displayOptions || {};
+            if (Array.isArray(_this.displayOptions.particleDensity)) {
+                // make sure the particle density stops array is is order by zoom level lowest zooms first
+                _this.displayOptions.particleDensity.sort(function (a, b) {
+                    return a.zoom - b.zoom;
+                });
+            }
             _this.reportValues = properties.reportValues === false ? false : true; // default to true
             // watch url prop so a fetch of data and redraw will occur.
             watchUtils.watch(_this, "url", function (a, b, c, d) { return _this._urlChanged(a, b, c, d); });
-            // watch url prop so a fetch of data and redraw will occur.
+            // watch visible so a fetch of data and redraw will occur.
             watchUtils.watch(_this, "visible", function (a, b, c, d) { return _this._visibleChanged(a, b, c, d); });
             // watch display options so to redraw when changed.
             watchUtils.watch(_this, "displayOptions", function (a, b, c, d) { return _this._displayOptionsChanged(a, b, c, d); });
@@ -249,26 +290,6 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
         AnimatedEnvironmentLayer.prototype.doDraw = function (data) {
             this.layerView.prepDraw(data);
         };
-        AnimatedEnvironmentLayer.prototype._setParticleMultiplier = function () {
-            var currentZoom = this.layerView.view.zoom;
-            var baseZoom = this.displayOptions.particleMultiplierByZoom.zoomLevel;
-            var pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier;
-            if (currentZoom > baseZoom) {
-                var zoomDiff = (currentZoom - baseZoom);
-                pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier - (zoomDiff * this.displayOptions.particleMultiplierByZoom.diffRatio);
-            }
-            else if (currentZoom < baseZoom) {
-                var zoomDiff = baseZoom - currentZoom;
-                pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier + (zoomDiff * this.displayOptions.particleMultiplierByZoom.diffRatio);
-            }
-            if (pm < this.displayOptions.particleMultiplierByZoom.minMultiplier)
-                pm = this.displayOptions.particleMultiplierByZoom.minMultiplier;
-            else if (pm > this.displayOptions.particleMultiplierByZoom.maxMultiplier)
-                pm = this.displayOptions.particleMultiplierByZoom.maxMultiplier;
-            if (this.layerView.windy) {
-                this.layerView.windy.PARTICLE_MULTIPLIER = pm;
-            }
-        };
         AnimatedEnvironmentLayer.prototype.viewPointerMove = function (evt) {
             if (!this.layerView.windy || !this.visible)
                 return;
@@ -333,7 +354,7 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             this.draw();
         };
         /**
-         * Watch of the url property - call draw again with a refetch
+         * Watch of the visible property - stop and start depending on value
          */
         AnimatedEnvironmentLayer.prototype._visibleChanged = function (visible, b, c, d) {
             if (!visible) {
@@ -401,20 +422,20 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             this.gridData = data;
         };
         Windy.prototype.setDisplayOptions = function (options) {
-            this.MIN_VELOCITY_INTENSITY = options.minVelocity || 0; // velocity at which particle intensity is minimum (m/s)
-            this.MAX_VELOCITY_INTENSITY = options.maxVelocity || 10; // velocity at which particle intensity is maximum (m/s)
-            this.VELOCITY_SCALE = (options.velocityScale || 0.005) * (Math.pow(window.devicePixelRatio, 1 / 3) || 1); // scale for wind velocity (completely arbitrary--this value looks nice)
-            this.MAX_PARTICLE_AGE = options.particleAge || 90; // max number of frames a particle is drawn before regeneration
-            this.PARTICLE_LINE_WIDTH = options.lineWidth || 1; // line width of a drawn particle
-            // default particle multiplier to 2
-            this.PARTICLE_MULTIPLIER = options.particleMultiplier || 2;
-            this.PARTICLE_REDUCTION = Math.pow(window.devicePixelRatio, 1 / 3) || 1.6; // multiply particle count for mobiles by this amount
-            this.FRAME_RATE = options.frameRate || 15;
-            this.FRAME_TIME = 1000 / this.FRAME_RATE; // desired frames per second
-            this.APPLY_FADE_TRAIL = options.applyFadeTrail === false ? false : true;
-            //this.DRAW_TYPE = options.drawType;
+            this.displayOptions = options;
+            // setup some defaults
+            this.displayOptions.minVelocity = this.displayOptions.minVelocity || 0;
+            this.displayOptions.maxVelocity = this.displayOptions.maxVelocity || 10;
+            this.displayOptions.particleDensity = this.displayOptions.particleDensity || 10;
+            this.calculatedDensity = Array.isArray(this.displayOptions.particleDensity) ? 10 : this.displayOptions.particleDensity;
+            this.displayOptions.velocityScale = (this.displayOptions.velocityScale || 0.005) * (Math.pow(window.devicePixelRatio, 1 / 3) || 1); // scale for velocity (completely arbitrary -- this value looks nice)
+            this.displayOptions.particleAge = this.displayOptions.particleAge || 90;
+            this.displayOptions.lineWidth = this.displayOptions.lineWidth || 1;
+            this.displayOptions.particleReduction = this.displayOptions.particleReduction || (Math.pow(window.devicePixelRatio, 1 / 3) || 1.6); // multiply particle count for mobiles by this amount
+            this.displayOptions.frameRate = this.displayOptions.frameRate || 15;
             var defaultColorScale = ["rgb(61,160,247)", "rgb(99,164,217)", "rgb(138,168,188)", "rgb(177,173,158)", "rgb(216,177,129)", "rgb(255,182,100)", "rgb(240,145,87)", "rgb(225,109,74)", "rgb(210,72,61)", "rgb(195,36,48)", "rgb(180,0,35)"];
-            this.colorScale = options.colorScale || defaultColorScale;
+            this.colorScale = this.displayOptions.colorScale || defaultColorScale;
+            this.FRAME_TIME = 1000 / this.displayOptions.frameRate; // desired frames per second
         };
         Windy.prototype.start = function (bounds, width, height, extent) {
             var _this = this;
@@ -605,7 +626,14 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             var y = Math.max(Math.floor(upperLeft[1]), 0);
             var xMax = Math.min(Math.ceil(lowerRight[0]), width - 1);
             var yMax = Math.min(Math.ceil(lowerRight[1]), height - 1);
-            return { x: x, y: y, xMax: width, yMax: yMax, width: width, height: height };
+            return {
+                x: x,
+                y: y,
+                xMax: xMax,
+                yMax: yMax,
+                width: width,
+                height: height
+            };
         };
         // interpolation for vectors like wind (u,v,m)
         Windy.prototype.bilinearInterpolateVector = function (x, y, g00, g10, g01, g11) {
@@ -700,7 +728,7 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             var _this = this;
             var projection = {};
             var mapArea = (extent.south - extent.north) * (extent.west - extent.east);
-            var velocityScale = this.VELOCITY_SCALE * Math.pow(mapArea, 0.4);
+            var velocityScale = this.displayOptions.velocityScale * Math.pow(mapArea, 0.4);
             var columns = [];
             var x = bounds.x;
             var interpolateColumn = function (x) {
@@ -710,7 +738,6 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
                     if (coord) {
                         var lon = coord[0], lat = coord[1];
                         if (isFinite(lon)) {
-                            //let wind = grid.interpolate(λ, φ);
                             var wind = _this.interpolate(lon, lat);
                             if (wind) {
                                 wind = _this.distort(projection, lon, lat, x, y, velocityScale, wind, extent);
@@ -774,33 +801,36 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
                 };
                 return _this.colorScale;
             };
-            var colorStyles = windIntensityColorScale(this.MIN_VELOCITY_INTENSITY, this.MAX_VELOCITY_INTENSITY);
+            var colorStyles = windIntensityColorScale(this.displayOptions.minVelocity, this.displayOptions.maxVelocity);
             var buckets = colorStyles.map(function () {
                 return [];
             });
-            var particleCount = Math.round(bounds.width * bounds.height * this.PARTICLE_MULTIPLIER / 1000);
+            // based on the density setting, add that many per 50px x 50px
+            var densityRatio = 50 * window.devicePixelRatio;
+            var densityMultiplier = (bounds.width / densityRatio) * (bounds.height / densityRatio);
+            var particleCount = Math.ceil(this.calculatedDensity * densityMultiplier);
             if (this.isMobile()) {
-                particleCount *= this.PARTICLE_REDUCTION;
+                particleCount *= this.displayOptions.particleReduction;
             }
-            var fadeFillStyle = "rgba(0, 0, 0, 0.97)";
             var particles = [];
             for (var i = 0; i < particleCount; i++) {
-                particles.push(field.randomize({ age: Math.floor(Math.random() * this.MAX_PARTICLE_AGE) + 0 }));
+                particles.push(field.randomize({ age: Math.floor(Math.random() * this.displayOptions.particleAge) + 0 }));
             }
             var evolve = function () {
                 buckets.forEach(function (bucket) {
                     bucket.length = 0;
                 });
                 particles.forEach(function (particle) {
-                    if (particle.age > _this.MAX_PARTICLE_AGE) {
+                    if (particle.age > _this.displayOptions.particleAge) {
                         field.randomize(particle).age = 0;
                     }
                     var x = particle.x;
                     var y = particle.y;
                     var v = field(x, y); // vector at current position
                     var m = v[2];
+                    particle.currentVector = v;
                     if (m === null) {
-                        particle.age = _this.MAX_PARTICLE_AGE; // particle has escaped the grid, never to return...
+                        particle.age = _this.displayOptions.particleAge; // particle has escaped the grid, never to return...
                     }
                     else {
                         var xt = x + v[0];
@@ -821,33 +851,45 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
                 });
             };
             var g = this.canvas.getContext("2d");
-            g.lineWidth = this.PARTICLE_LINE_WIDTH;
+            var fadeFillStyle = "rgba(0, 0, 0, 0.97)";
             g.fillStyle = fadeFillStyle;
             g.globalAlpha = 0.6;
             var draw = function () {
-                // Fade existing particle trails.
-                if (_this.APPLY_FADE_TRAIL) {
-                    var prev = "lighter";
+                if (!_this.displayOptions.customFadeFunction) {
+                    // Fade existing particle trails - using the default settings
                     g.globalCompositeOperation = "destination-in";
                     g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
-                    g.globalCompositeOperation = prev;
-                    g.globalAlpha = 0.9;
+                    g.globalCompositeOperation = "lighter";
+                    g.globalAlpha = 0.95;
                 }
                 else {
-                    g.clearRect(0, 0, _this.canvas.width, _this.canvas.height);
+                    // call the custom function provided by the caller so they can control fade out completely.
+                    _this.displayOptions.customFadeFunction(g, bounds);
                 }
                 // Draw new particle trails.
                 buckets.forEach(function (bucket, i) {
                     if (bucket.length > 0) {
-                        g.beginPath();
-                        g.strokeStyle = colorStyles[i];
-                        bucket.forEach(function (particle) {
-                            g.moveTo(particle.x, particle.y);
-                            g.lineTo(particle.xt, particle.yt);
-                            particle.x = particle.xt;
-                            particle.y = particle.yt;
-                        });
-                        g.stroke();
+                        if (!_this.displayOptions.customDrawFunction) {
+                            // default drawing, draw a line
+                            g.beginPath();
+                            g.strokeStyle = colorStyles[i];
+                            bucket.forEach(function (particle) {
+                                g.lineWidth = _this.displayOptions.lineWidth;
+                                g.moveTo(particle.x, particle.y);
+                                g.lineTo(particle.xt, particle.yt);
+                                particle.x = particle.xt;
+                                particle.y = particle.yt;
+                            });
+                            g.stroke();
+                        }
+                        else {
+                            // custom draw function specified, so pass each particle to it and then update the particle position
+                            bucket.forEach(function (particle) {
+                                _this.displayOptions.customDrawFunction(g, particle, colorStyles[i]);
+                                particle.x = particle.xt;
+                                particle.y = particle.yt;
+                            });
+                        }
                     }
                 });
             };

@@ -10,7 +10,7 @@ import * as on from "dojo/on";
 import * as dom from "dojo/dom";
 import * as domClass from "dojo/dom-class";
  
-import { AnimatedEnvironmentLayer, DisplayOptions, PointReport } from "./animatedEnvironmentLayer";
+import { AnimatedEnvironmentLayer, DisplayOptions, PointReport, Bounds, Particle } from "./animatedEnvironmentLayer";
  
 interface DataOption {
     id: string;
@@ -94,15 +94,7 @@ export class PageSetup {
             url: "./data/global-wind.json",
             id: "Global wind",
             displayOptions: {
-                maxVelocity: 15,
-                // make the particle multipliers change depending on zoom level
-                particleMultiplierByZoom: {
-                    diffRatio: 0.4,
-                    maxMultiplier: 5,
-                    minMultiplier: 0.2,
-                    particleMultiplier: 4,
-                    zoomLevel: 4
-                }
+                maxVelocity: 15
             },
             
         };
@@ -115,9 +107,7 @@ export class PageSetup {
                 maxVelocity: 5,
                 lineWidth: 10,
                 particleAge: 30,
-                particleMultiplier: 1,
                 //colorScale: ["#ffffff", "#e9ecfb", "#d3d9f7", "#bdc6f3", "#a7b3ef", "#91a0eb", "#7b8de7", "#657ae3", "#4f67df", "#3954db"]
-               
             }
         };
 
@@ -127,7 +117,11 @@ export class PageSetup {
             id: "Global wind 2",
             displayOptions: {
                 maxVelocity: 15,
-                particleMultiplier: 3
+                velocityScale: 0.01,
+                frameRate: 30,
+                particleDensity: [{ zoom: 2, density: 10 }, { zoom: 4, density: 9 }, { zoom: 8, density: 6 }, { zoom: 10, density: 4 }, { zoom: 12, density: 3 }],
+                customFadeFunction: this.customFadeFunction, // a custom fade function
+                customDrawFunction: this.customDrawFunction // a custom draw function
             } 
         };
 
@@ -142,6 +136,31 @@ export class PageSetup {
             element.innerHTML = opt.id;
             select.appendChild(element);
         });
+    }
+
+
+    private customDrawFunction(context: CanvasRenderingContext2D, particle: Particle, colorStyle: string) {
+
+        // draw a circle and make the radius a factor of the magnitude
+        let radius = particle.currentVector[2] / 9;
+        context.beginPath();
+        context.fillStyle = colorStyle;
+        context.arc(particle.x, particle.y, radius, 0, 2 * Math.PI);
+        context.fill();
+
+    }
+
+    private customFadeFunction(context: CanvasRenderingContext2D, bounds: Bounds) {
+
+        // Fade existing particle trails
+        context.globalCompositeOperation = "destination-in";
+        context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+        context.globalCompositeOperation = "lighter";
+        context.globalAlpha = 0.95;
+
+        // perhaps you don't want a trail and just want it cleared between each frame - then just use the below line.
+        //context.clearRect(bounds.x, bounds.y, bounds.width, bounds.height);
+
     }
 
     private _basemapChange(id) {

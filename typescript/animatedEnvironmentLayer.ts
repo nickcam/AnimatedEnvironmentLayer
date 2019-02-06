@@ -31,38 +31,94 @@ import * as esriRequest from "esri/request";
 import * as Extent from "esri/geometry/Extent";
 import * as webMercatorUtils from "esri/geometry/support/webMercatorUtils";
 import * as watchUtils from "esri/core/watchUtils";
-import * as SpatialReference from "esri/geometry/SpatialReference";
 import * as Point from "esri/geometry/Point";
 import * as asd from "esri/core/accessorSupport/decorators";
 
 
 import BaseLayerView2D = require("esri/views/2d/layers/BaseLayerView2D");
 
-//export type DrawType = "line" | "circle" | "custom";
+
+export type CustomFadeFunction = (context: CanvasRenderingContext2D, bounds: Bounds) => void;
+export type CustomDrawFunction = (context: CanvasRenderingContext2D, particles: Particle, colorStyle: string) => void;
+
+export interface DensityStop {
+    zoom: number;
+    density: number;
+}
 
 /** 
-    The available display options to chaneg the particle rendering
+    The available display options to change the particle rendering
 */
 export interface DisplayOptions {
+
+    /**
+     * Minimum velcity that will applied to a particle
+     * default: 0
+     * */
     minVelocity?: number;
+
+    /**
+     * Maimum velocity that will be applied to a particle
+     * default: 10
+     * */
     maxVelocity?: number;
+
+    /**
+     * Determines how quickly the particle moves based on it's velocity. Higher values mean faster moving.
+     * default: 0.005
+     * */
     velocityScale?: number;
+
+    /**
+     * The number of frames a particle will live for.
+     * default: 90
+     * */
     particleAge?: number;
-    particleLineWidth?: number;
-    particleMultiplier?: number;
-    particleMultiplierByZoom?: ParticleMultiplierByZoom,
+
+
+    /**
+     * The number of particles per 50x50 pixel block. If a number that density is applied across the board. If an array of density stops decalre the zoom level and density that would you like to apply.
+     * start with higher zoom first eg: [{ zoom: 2, density: 10 }, { zoom: 5, density: 8 }, {zoom: 6, density: 7}]
+     * the first being the zoom and 
+     * default: 10
+     * */
+    particleDensity?: number | DensityStop[];
+
+
+    /**
+     * The frame rate to use when animating. If the velocityScale parameter is higher then this will need to be increased to keep up with the required frames to draw the particles at a quicker speed. 
+     * If it's not a high enough value the animations could appear jumpy.
+     * default: 15
+     * */
     frameRate?: number;
+
+    /**
+     * An array of color values to use. Velocity values will be ampped o this color scale.
+     * default: ["rgb(61,160,247)", "rgb(99,164,217)", "rgb(138,168,188)", "rgb(177,173,158)", "rgb(216,177,129)", "rgb(255,182,100)", "rgb(240,145,87)", "rgb(225,109,74)", "rgb(210,72,61)", "rgb(195,36,48)", "rgb(180,0,35)"];
+     * */
     colorScale?: string[];
+
+    /**
+     * the width of the line for default rendering.
+     * default: 1
+     * */
     lineWidth?: number;
 
+    /**
+     * An amount to reduce particle numbers by on mobile devices
+     * default: (Math.pow(window.devicePixelRatio, 1 / 3) || 1.6)
+     * */
+    particleReduction?: number;
 
-    /** Whether to fade out the drawn item over a few frames. If false it will clear and redraw every frame, if true a trail will be created behind the movement of the particle.
-    * default: true */
-    applyFadeTrail?: boolean;
+    /** 
+     * A function that if exists will be called in the draw method that allows specific settings for a layer to be applied for the fading out part of the drawing. 
+     * */
+    customFadeFunction?: CustomFadeFunction; 
 
-    /** The type of draw object to use for the particle. Can be 'line', 'circle' or custom. Other properties to describe the drawing must be set depending on what is set here. */
-    //drawType: DrawType;
-
+    /**
+     * A function that if exists will be called to draw the particles. Allows for caller to have complete control over drawing. Will pass the context, particle object and the color style. 
+     * */
+    customDrawFunction?: CustomDrawFunction;
 }
 
 
@@ -105,6 +161,24 @@ export interface AnimatedEnvironmentLayerProperties extends __esri.GraphicsLayer
     reportValues?: boolean;
 }
 
+export interface Bounds {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    xMax: number;
+    yMax: number;
+}
+
+export interface Particle {
+    x?: number;
+    y?: number;
+    xt?: number;
+    yt?: number;
+    age?: number;
+    currentVector?: number[];
+}
+
 
 class AnimatedEnvironmentLayerView2D extends BaseLayerView2D {
 
@@ -116,15 +190,11 @@ class AnimatedEnvironmentLayerView2D extends BaseLayerView2D {
     private drawPrepping: boolean;
     private drawReady: boolean;
 
-    private animationLoopHandle?: number;
-
     private southWest: Point;
     private northEast: Point;
 
-    private frameTime: number;
     windy: Windy;
-
-    private date: Date;
+    date: Date;
 
     constructor(props) {
         super();
@@ -170,7 +240,7 @@ class AnimatedEnvironmentLayerView2D extends BaseLayerView2D {
         if (!this.drawPrepping && !this.drawReady) { 
             // prep the draw
             this.drawPrepping = true;
-            if (this.windy.gridData) {
+            if (this.windy && this.windy.gridData) {
                 this.prepDraw();
             }
             return;
@@ -260,6 +330,7 @@ class AnimatedEnvironmentLayerView2D extends BaseLayerView2D {
 
         if (data) this.windy.setData(data);
 
+        this.setParticleDensity();
         this.startDraw();
         this.drawPrepping = false;
         this.drawReady = true;
@@ -286,6 +357,53 @@ class AnimatedEnvironmentLayerView2D extends BaseLayerView2D {
         if (this.southWest.x > this.northEast.x && this.northEast.x < 0) {
             this.northEast.x = 360 + this.northEast.x;
         }
+
+    }
+
+
+    private setParticleDensity() {
+        if (!Array.isArray(this.layer.displayOptions.particleDensity)) {
+            return; // not an array, so must be a number, exit out here as there's no calc to do
+        }
+
+        let stops = this.layer.displayOptions.particleDensity;
+        let currentZoom = Math.round(this.view.zoom);
+        let density = -1;
+
+        let zoomMap = stops.map((stop) => {
+            return stop.zoom;
+        });
+
+        // loop the zooms 
+
+        for (let i = 0; i < stops.length; i++) {
+            let stop = stops[i];
+
+            if (stop.zoom === currentZoom) {
+                density = stop.density;
+                break;
+            }
+
+            let nextStop = i + 1 < stops.length ? stops[i + 1] : undefined;
+            if (!nextStop) {
+                // this is the last one, so just set to this value
+                density = stop.density;
+                break;
+            }
+
+            if (nextStop.zoom > currentZoom) {
+                density = stop.density;
+                break;
+            }
+
+        }
+
+        // if density still not found, set it to the last value in the stops array
+        if (density === -1) {
+            density = stops[stops.length - 1].density;
+        }
+
+        this.windy.calculatedDensity = density;
 
     }
 
@@ -337,14 +455,22 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
 
         // If the active view is set in properties, then set it here.
         this.url = properties.url;
-        this.displayOptions = properties.displayOptions || {  };
-        this.reportValues = properties.reportValues === false ? false : true; // default to true
+        this.displayOptions = properties.displayOptions || {};
+        if (Array.isArray(this.displayOptions.particleDensity)) {
 
+            // make sure the particle density stops array is is order by zoom level lowest zooms first
+            this.displayOptions.particleDensity.sort((a, b) => {
+                return a.zoom - b.zoom;
+            });
+        }
+
+
+        this.reportValues = properties.reportValues === false ? false : true; // default to true
 
         // watch url prop so a fetch of data and redraw will occur.
         watchUtils.watch(this, "url", (a, b, c, d) => this._urlChanged(a, b, c, d));
 
-        // watch url prop so a fetch of data and redraw will occur.
+        // watch visible so a fetch of data and redraw will occur.
         watchUtils.watch(this, "visible", (a, b, c, d) => this._visibleChanged(a, b, c, d));
 
         // watch display options so to redraw when changed.
@@ -425,29 +551,6 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     }
 
 
-    private _setParticleMultiplier() {
-        let currentZoom = this.layerView.view.zoom;
-        let baseZoom = this.displayOptions.particleMultiplierByZoom.zoomLevel;
-        let pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier;
-
-        if (currentZoom > baseZoom) {
-            let zoomDiff = (currentZoom - baseZoom);
-            pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier - (zoomDiff * this.displayOptions.particleMultiplierByZoom.diffRatio);
-        }
-        else if (currentZoom < baseZoom) {
-            let zoomDiff = baseZoom - currentZoom;
-            pm = this.displayOptions.particleMultiplierByZoom.particleMultiplier + (zoomDiff * this.displayOptions.particleMultiplierByZoom.diffRatio);
-        }
-
-        if (pm < this.displayOptions.particleMultiplierByZoom.minMultiplier) pm = this.displayOptions.particleMultiplierByZoom.minMultiplier;
-        else if (pm > this.displayOptions.particleMultiplierByZoom.maxMultiplier) pm = this.displayOptions.particleMultiplierByZoom.maxMultiplier;
-
-        if (this.layerView.windy) {
-            this.layerView.windy.PARTICLE_MULTIPLIER = pm;
-        }
-
-    }
-
     private viewPointerMove(evt) {
         if (!this.layerView.windy || !this.visible) return;
 
@@ -525,7 +628,7 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     }
 
     /**
-     * Watch of the url property - call draw again with a refetch
+     * Watch of the visible property - stop and start depending on value
      */
     private _visibleChanged(visible, b, c, d) {
         if (!visible) {
@@ -564,19 +667,10 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
  */
 class Windy {
 
-    MIN_VELOCITY_INTENSITY: number;
-    MAX_VELOCITY_INTENSITY: number;
-    VELOCITY_SCALE: number;
-    MAX_PARTICLE_AGE: number;
-    PARTICLE_LINE_WIDTH: number;
-    PARTICLE_MULTIPLIER: number;
-    PARTICLE_REDUCTION: number;
-    FRAME_RATE: number;
+    displayOptions: DisplayOptions;
+    calculatedDensity: number;
+
     FRAME_TIME: number;
-    APPLY_FADE_TRAIL: boolean;
-
-    //DRAW_TYPE: DrawType;
-
 
     colorScale: any;
     canvas: HTMLCanvasElement;
@@ -601,7 +695,6 @@ class Windy {
     nj;
 
     private _scanMode: number;
-    private _dynamicParticleMultiplier: boolean;
 
     constructor(canvas: HTMLCanvasElement, options: DisplayOptions, data?: any) {
 
@@ -616,27 +709,27 @@ class Windy {
     }
 
     setDisplayOptions(options: DisplayOptions) {
-        this.MIN_VELOCITY_INTENSITY = options.minVelocity || 0; // velocity at which particle intensity is minimum (m/s)
-        this.MAX_VELOCITY_INTENSITY = options.maxVelocity || 10; // velocity at which particle intensity is maximum (m/s)
-        this.VELOCITY_SCALE = (options.velocityScale || 0.005) * (Math.pow(window.devicePixelRatio, 1 / 3) || 1); // scale for wind velocity (completely arbitrary--this value looks nice)
-        this.MAX_PARTICLE_AGE = options.particleAge || 90; // max number of frames a particle is drawn before regeneration
-        this.PARTICLE_LINE_WIDTH = options.lineWidth || 1; // line width of a drawn particle
 
-        // default particle multiplier to 2
-        this.PARTICLE_MULTIPLIER = options.particleMultiplier || 2;
+        this.displayOptions = options;
 
-        this.PARTICLE_REDUCTION = Math.pow(window.devicePixelRatio, 1 / 3) || 1.6; // multiply particle count for mobiles by this amount
-        this.FRAME_RATE = options.frameRate || 15;
-        this.FRAME_TIME = 1000 / this.FRAME_RATE; // desired frames per second
+        // setup some defaults
+        this.displayOptions.minVelocity = this.displayOptions.minVelocity || 0;
+        this.displayOptions.maxVelocity = this.displayOptions.maxVelocity || 10;
+        this.displayOptions.particleDensity = this.displayOptions.particleDensity || 10;
 
-        this.APPLY_FADE_TRAIL = options.applyFadeTrail === false ? false : true;
+        this.calculatedDensity = Array.isArray(this.displayOptions.particleDensity) ? 10 : this.displayOptions.particleDensity;
 
-        //this.DRAW_TYPE = options.drawType;
 
+        this.displayOptions.velocityScale = (this.displayOptions.velocityScale || 0.005) * (Math.pow(window.devicePixelRatio, 1 / 3) || 1); // scale for velocity (completely arbitrary -- this value looks nice)
+        this.displayOptions.particleAge = this.displayOptions.particleAge || 90;
+        this.displayOptions.lineWidth = this.displayOptions.lineWidth || 1;
+        this.displayOptions.particleReduction = this.displayOptions.particleReduction || (Math.pow(window.devicePixelRatio, 1 / 3) || 1.6); // multiply particle count for mobiles by this amount
+        this.displayOptions.frameRate = this.displayOptions.frameRate || 15; 
 
         var defaultColorScale = ["rgb(61,160,247)", "rgb(99,164,217)", "rgb(138,168,188)", "rgb(177,173,158)", "rgb(216,177,129)", "rgb(255,182,100)", "rgb(240,145,87)", "rgb(225,109,74)", "rgb(210,72,61)", "rgb(195,36,48)", "rgb(180,0,35)"];
-        this.colorScale = options.colorScale || defaultColorScale;
+        this.colorScale = this.displayOptions.colorScale || defaultColorScale;
 
+        this.FRAME_TIME = 1000 / this.displayOptions.frameRate; // desired frames per second
 
     }
 
@@ -863,14 +956,21 @@ class Windy {
     }
 
 
-    private buildBounds(bounds, width, height) {
+    private buildBounds(bounds, width, height) : Bounds {
         let upperLeft = bounds[0];
         let lowerRight = bounds[1];
         let x = Math.round(upperLeft[0]);
         let y = Math.max(Math.floor(upperLeft[1]), 0);
         let xMax = Math.min(Math.ceil(lowerRight[0]), width - 1);
         let yMax = Math.min(Math.ceil(lowerRight[1]), height - 1);
-        return { x: x, y: y, xMax: width, yMax: yMax, width: width, height: height };
+        return {
+            x: x,
+            y: y,
+            xMax: xMax,
+            yMax: yMax,
+            width: width,
+            height: height
+        };
     }
 
 
@@ -984,11 +1084,11 @@ class Windy {
     }
 
 
-    private interpolateField(grid, bounds, extent, callback) {
+    private interpolateField(grid, bounds: Bounds, extent, callback) {
 
         let projection = {};
         let mapArea = (extent.south - extent.north) * (extent.west - extent.east);
-        let velocityScale = this.VELOCITY_SCALE * Math.pow(mapArea, 0.4);
+        let velocityScale = this.displayOptions.velocityScale * Math.pow(mapArea, 0.4);
 
         let columns = [];
         let x = bounds.x;
@@ -1001,7 +1101,6 @@ class Windy {
                     var lon = coord[0],
                         lat = coord[1];
                     if (isFinite(lon)) {
-                        //let wind = grid.interpolate(λ, φ);
                         let wind = this.interpolate(lon, lat);
                         if (wind) {
                             wind = this.distort(projection, lon, lat, x, y, velocityScale, wind, extent);
@@ -1030,7 +1129,7 @@ class Windy {
     }
 
 
-    private createField(columns, bounds, callback) {
+    private createField(columns, bounds: Bounds, callback) {
 
         /**
         * @returns {Array} wind vector [u, v, magnitude] at the point (x, y), or [NaN, NaN, null] if wind
@@ -1047,10 +1146,10 @@ class Windy {
             columns = [];
         };
 
-        field.randomize = (o) => {
+        field.randomize = (o: Particle) => {
             // UNDONE: this method is terrible
-            var x, y;
-            var safetyNet = 0;
+            let x, y;
+            let safetyNet = 0;
             do {
                 x = Math.round(Math.floor(Math.random() * bounds.width) + bounds.x);
                 y = Math.round(Math.floor(Math.random() * bounds.height) + bounds.y);
@@ -1063,7 +1162,7 @@ class Windy {
         callback(bounds, field);
     }
 
-    private animate(bounds, field) {
+    private animate(bounds: Bounds, field) {
 
         let windIntensityColorScale = (min, max) => {
             this.colorScale.indexFor = (m) => {
@@ -1073,37 +1172,40 @@ class Windy {
             return this.colorScale;
         }
 
-        let colorStyles = windIntensityColorScale(this.MIN_VELOCITY_INTENSITY, this.MAX_VELOCITY_INTENSITY);
+        let colorStyles = windIntensityColorScale(this.displayOptions.minVelocity, this.displayOptions.maxVelocity);
         let buckets = colorStyles.map(function () {
             return [];
         });
 
-        let particleCount = Math.round(bounds.width * bounds.height * this.PARTICLE_MULTIPLIER / 1000);
+        // based on the density setting, add that many per 50px x 50px
+        let densityRatio = 50 * window.devicePixelRatio;
+        let densityMultiplier = (bounds.width / densityRatio) * (bounds.height / densityRatio);
+        let particleCount = Math.ceil(this.calculatedDensity * densityMultiplier);
+
         if (this.isMobile()) {
-            particleCount *= this.PARTICLE_REDUCTION;
+            particleCount *= this.displayOptions.particleReduction;
         }
 
-        let fadeFillStyle = "rgba(0, 0, 0, 0.97)";
-
-        let particles = [];
+        let particles: Particle[] = [];
         for (let i = 0; i < particleCount; i++) {
-            particles.push(field.randomize({ age: Math.floor(Math.random() * this.MAX_PARTICLE_AGE) + 0 }));
+            particles.push(field.randomize({ age: Math.floor(Math.random() * this.displayOptions.particleAge) + 0 }));
         }
 
         let evolve = () => {
-            buckets.forEach((bucket) => {
+            buckets.forEach((bucket: Particle[]) => {
                 bucket.length = 0;
             });
             particles.forEach((particle) => {
-                if (particle.age > this.MAX_PARTICLE_AGE) {
+                if (particle.age > this.displayOptions.particleAge) {
                     field.randomize(particle).age = 0;
                 }
                 var x = particle.x;
                 var y = particle.y;
                 var v = field(x, y); // vector at current position
                 var m = v[2];
+                particle.currentVector = v;
                 if (m === null) {
-                    particle.age = this.MAX_PARTICLE_AGE; // particle has escaped the grid, never to return...
+                    particle.age = this.displayOptions.particleAge; // particle has escaped the grid, never to return...
                 } else {
                     var xt = x + v[0];
                     var yt = y + v[1];
@@ -1123,36 +1225,51 @@ class Windy {
         }
 
         let g = this.canvas.getContext("2d");
-        g.lineWidth = this.PARTICLE_LINE_WIDTH;
+
+        let fadeFillStyle = "rgba(0, 0, 0, 0.97)";
         g.fillStyle = fadeFillStyle;
         g.globalAlpha = 0.6;
 
         let draw = () => {
-            // Fade existing particle trails.
 
-            if (this.APPLY_FADE_TRAIL) {
-                let prev = "lighter";
+            if (!this.displayOptions.customFadeFunction) {
+                // Fade existing particle trails - using the default settings
                 g.globalCompositeOperation = "destination-in";
                 g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
-                g.globalCompositeOperation = prev;
-                g.globalAlpha = 0.9;
+                g.globalCompositeOperation = "lighter";
+                g.globalAlpha = 0.95;
             }
             else {
-                g.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                // call the custom function provided by the caller so they can control fade out completely.
+                this.displayOptions.customFadeFunction(g, bounds);
             }
             
             // Draw new particle trails.
-            buckets.forEach((bucket, i) => {
+            buckets.forEach((bucket: Particle[], i) => {
                 if (bucket.length > 0) {
-                    g.beginPath();
-                    g.strokeStyle = colorStyles[i];
-                    bucket.forEach((particle) => {
-                        g.moveTo(particle.x, particle.y);
-                        g.lineTo(particle.xt, particle.yt);
-                        particle.x = particle.xt;
-                        particle.y = particle.yt;
-                    });
-                    g.stroke();
+
+                    if (!this.displayOptions.customDrawFunction) {
+                        // default drawing, draw a line
+                        g.beginPath();
+                        g.strokeStyle = colorStyles[i];
+                        bucket.forEach((particle) => {
+                            g.lineWidth = this.displayOptions.lineWidth;
+                            g.moveTo(particle.x, particle.y);
+                            g.lineTo(particle.xt, particle.yt);
+                            particle.x = particle.xt;
+                            particle.y = particle.yt;
+
+                        });
+                        g.stroke();
+                    }
+                    else {
+                        // custom draw function specified, so pass each particle to it and then update the particle position
+                        bucket.forEach((particle) => {
+                            this.displayOptions.customDrawFunction(g, particle, colorStyles[i]);
+                            particle.x = particle.xt;
+                            particle.y = particle.yt;
+                        });
+                    }
                 }
             });
         }
