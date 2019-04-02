@@ -1,7 +1,7 @@
 # AnimatedEnvironmentLayer
 
-Support arcgis-js-api v4.10.
-See the branches for a working version for v4.6 - v4.9.
+Supports arcgis-js-api v4.11.
+See the branches for a working version for v4.6 - v4.10.
 
 An arcgis js api layer that can display data from GRIB2 files as animated particles.
 Uses a canvas to render the particles.
@@ -127,8 +127,4 @@ Alternatively you could use precompiled amd module `./ael/animatedEnvironmentLay
 # Notes
 
 Doesn't work with 3d yet...will work on it as I'd like 3d support. I'm no expert with webgl though so it could be a while, if ever. Help is welcome!
-
-### v4.10 typings
-The @types/arcgis-js-api are incorrect for BaseLayerView2D module - it can't be subclassed using the 4.10 types. This project just uses the v4.9 types which work fine. This will be fixed in v4.11 apparently. [https://community.esri.com/thread/226852-v410-extend-baselayerview2d-in-typescript](https://community.esri.com/thread/226852-v410-extend-baselayerview2d-in-typescript)
-
 
