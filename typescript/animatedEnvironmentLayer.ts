@@ -77,9 +77,9 @@ export interface DisplayOptions {
 
 
     /**
-     * The number of particles per 50x50 pixel block. If a number that density is applied across the board. If an array of density stops decalre the zoom level and density that would you like to apply.
-     * start with higher zoom first eg: [{ zoom: 2, density: 10 }, { zoom: 5, density: 8 }, {zoom: 6, density: 7}]
-     * the first being the zoom and 
+     * The number of particles per 50x50 pixel block.
+     * If a number that density is applied across the board. 
+     * If a DensityStop[] declare the zoom level and density that would you like to apply in each entry. Start with higher zoom first eg: [{ zoom: 2, density: 10 }, { zoom: 5, density: 8 }, {zoom: 6, density: 7}]
      * default: 10
      * */
     particleDensity?: number | DensityStop[];
@@ -93,13 +93,13 @@ export interface DisplayOptions {
     frameRate?: number;
 
     /**
-     * An array of color values to use. Velocity values will be ampped o this color scale.
+     * An array of color values to use. Velocity values will be mapped to this color scale.
      * default: ["rgb(61,160,247)", "rgb(99,164,217)", "rgb(138,168,188)", "rgb(177,173,158)", "rgb(216,177,129)", "rgb(255,182,100)", "rgb(240,145,87)", "rgb(225,109,74)", "rgb(210,72,61)", "rgb(195,36,48)", "rgb(180,0,35)"];
      * */
     colorScale?: string[];
 
     /**
-     * the width of the line for default rendering.
+     * The width of the line for default rendering.
      * default: 1
      * */
     lineWidth?: number;
@@ -111,7 +111,7 @@ export interface DisplayOptions {
     particleReduction?: number;
 
     /** 
-     * A function that if exists will be called in the draw method that allows specific settings for a layer to be applied for the fading out part of the drawing. 
+     * A function that if exists will be called in the draw method that allows for specific code to be run for the fading out part of the drawing. 
      * */
     customFadeFunction?: CustomFadeFunction; 
 
@@ -121,27 +121,6 @@ export interface DisplayOptions {
     customDrawFunction?: CustomDrawFunction;
 }
 
-
-/**
-    An simple object to define dynamic particle multipliers depending on current zoom level.
-    A basic attempt to cater for particles displaying too densely on close in zoom levels.
-*/
-export interface ParticleMultiplierByZoom {
-    // the base zoom level to start calculating at. Find a pariticle multipler at this zoom level that looks good for your data.
-    zoomLevel: number,
-
-    // The particle multiplier for the base zoom level specified above. Find a particle multipler at this zoom level that looks good for your data.
-    particleMultiplier: number,
-
-    // The amount to subtract or add to the particle multiplier depending on zoom level
-    diffRatio: number,
-
-    // the min value the multiplier can go
-    minMultiplier: number,
-
-    // the max value the multiplier can go
-    maxMultiplier: number
-}
 
 
 /**
@@ -160,7 +139,7 @@ export interface AnimatedEnvironmentLayerProperties extends __esri.GraphicsLayer
     displayOptions?: DisplayOptions;
     reportValues?: boolean;
 }
-
+ 
 export interface Bounds {
     x: number;
     y: number;
