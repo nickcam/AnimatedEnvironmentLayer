@@ -1,7 +1,7 @@
 # AnimatedEnvironmentLayer
 
-Support arcgis-js-api v4.10.
-See the branches for a working version for v4.6 - v4.9.
+Supports arcgis-js-api v4.11.
+See the branches for a working version for v4.6 - v4.10.
 
 An arcgis js api layer that can display data from GRIB2 files as animated particles.
 Uses a canvas to render the particles.
@@ -54,9 +54,9 @@ export interface DisplayOptions {
 
 
     /**
-     * The number of particles per 50x50 pixel block. If a number that density is applied across the board. If an array of density stops decalre the zoom level and density that would you like to apply.
-     * start with higher zoom first eg: [{ zoom: 2, density: 10 }, { zoom: 5, density: 8 }, {zoom: 6, density: 7}]
-     * the first being the zoom and 
+     * The number of particles per 50x50 pixel block.
+     * If a number that density is applied across the board. 
+     * If a DensityStop[] declare the zoom level and density that would you like to apply in each entry. Start with higher zoom first eg: [{ zoom: 2, density: 10 }, { zoom: 5, density: 8 }, {zoom: 6, density: 7}]
      * default: 10
      * */
     particleDensity?: number | DensityStop[];
@@ -70,13 +70,13 @@ export interface DisplayOptions {
     frameRate?: number;
 
     /**
-     * An array of color values to use. Velocity values will be ampped o this color scale.
+     * An array of color values to use. Velocity values will be mapped to this color scale.
      * default: ["rgb(61,160,247)", "rgb(99,164,217)", "rgb(138,168,188)", "rgb(177,173,158)", "rgb(216,177,129)", "rgb(255,182,100)", "rgb(240,145,87)", "rgb(225,109,74)", "rgb(210,72,61)", "rgb(195,36,48)", "rgb(180,0,35)"];
      * */
     colorScale?: string[];
 
     /**
-     * the width of the line for default rendering.
+     * The width of the line for default rendering.
      * default: 1
      * */
     lineWidth?: number;
@@ -88,7 +88,7 @@ export interface DisplayOptions {
     particleReduction?: number;
 
     /** 
-     * A function that if exists will be called in the draw method that allows specific settings for a layer to be applied for the fading out part of the drawing. 
+     * A function that if exists will be called in the draw method that allows for specific code to be run for the fading out part of the drawing. 
      * */
     customFadeFunction?: CustomFadeFunction; 
 
@@ -127,8 +127,4 @@ Alternatively you could use precompiled amd module `./ael/animatedEnvironmentLay
 # Notes
 
 Doesn't work with 3d yet...will work on it as I'd like 3d support. I'm no expert with webgl though so it could be a while, if ever. Help is welcome!
-
-### v4.10 typings
-The @types/arcgis-js-api are incorrect for BaseLayerView2D module - it can't be subclassed using the 4.10 types. This project just uses the v4.9 types which work fine. This will be fixed in v4.11 apparently. [https://community.esri.com/thread/226852-v410-extend-baselayerview2d-in-typescript](https://community.esri.com/thread/226852-v410-extend-baselayerview2d-in-typescript)
-
 
