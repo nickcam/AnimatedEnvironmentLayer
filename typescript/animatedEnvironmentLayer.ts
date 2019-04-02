@@ -479,7 +479,7 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     }
 
 
-    private createLayerView(view: __esri.MapView | __esri.SceneView) {
+    createLayerView(view: __esri.MapView | __esri.SceneView) {
 
         // only supports 2d right now.
         if (view.type !== "2d") return;
