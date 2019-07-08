@@ -1,7 +1,7 @@
 # AnimatedEnvironmentLayer
 
-Supports arcgis-js-api v4.11.
-See the branches for a working version for v4.6 - v4.10.
+Supports arcgis-js-api v4.12.
+See the branches for code that supoprts older api versions.
 
 An arcgis js api layer that can display data from GRIB2 files as animated particles.
 Uses a canvas to render the particles.
@@ -117,12 +117,23 @@ That project takes inspiration from the following two projects which are well wo
 
 # Usage
 
-If you want to run the repo locally, just do an npm install and npm start. The reload server will spin up the app and watch for file changes to trigger recompilation.
+If you want to run it locally just download or clone the repo and run
+
+```npm install```
+
+then
+
+```npm start```
+
+The reload server will spin up an instance on localhost:8080
+
+There's no npm package so if you want to add it to your project there's two options.
+
+- Grab the ts file **typescript/animatedEnvironmentLayer.ts** and place it somewhere in your project so it will be compiled along with the rest of your project. You'll also need @types/arcgis-js-api and the dojo typings included.
+
+- Alternatively grab the already compiled **ael/animatedEnvironmentLayer.js** and reference it like the other javascript esri amd modules.
 
 There's no @types package for dojo v11.x yet, but there is an npm package 'dojo-typings'. Even the dojo-typings package doesn't go as high as 1.12.x which arcgis now uses. Had to just include a reference to the dojo types in a custom index.d.ts file.
-
-You could just copy the typescript file `./typescript/animatedEnvironmentLayer.ts` and compile it your own project.
-Alternatively you could use precompiled amd module `./ael/animatedEnvironmentLayer.js` if you're not using typescript.
 
 # Notes
 
