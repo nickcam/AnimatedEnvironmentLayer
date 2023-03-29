@@ -257,8 +257,8 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             });
             this.layerView.view.on("pointer-move", function (evt) { return _this.viewPointerMove(evt); });
             // since Esri isn't calling attach I presume its related to the modification of this method.
-            // Description says its called after its created and before its asked to draw content.  My assumption that putting
-            // it between the constructor call and before the promise is resolved satisfies this criteria.
+            // Description says attach called after its created and before its asked to draw content.  My assumption is
+            // that putting it between the constructor call and before the promise is resolved satisfies this criteria.
             this.layerView.attach();
             this.draw(true);
             return promiseUtils.create(function (resolve, reject) { return resolve(_this.layerView); });
