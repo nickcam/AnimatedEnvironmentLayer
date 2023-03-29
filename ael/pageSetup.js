@@ -37,6 +37,17 @@ define(["require", "exports", "esri/views/MapView", "esri/Map", "esri/geometry/P
                 dom.byId("direction").innerHTML = rpt.degree ? rpt.degree.toFixed(1) : "n/a";
                 dom.byId("speed").innerHTML = rpt.velocity ? rpt.velocity.toFixed(2) : "n/a";
             });
+            //this.listenOnDevicePixelRatio();
+        };
+        PageSetup.prototype.listenOnDevicePixelRatio = function () {
+            var _this = this;
+            var mediaQuery = window.matchMedia("(resolution: " + window.devicePixelRatio + "dppx)");
+            mediaQuery.addEventListener("change", function () { console.log("in change"); _this.devicePixelRatioChanged(); }, { once: true });
+            console.log("called listenOnDevicePixelRatio");
+        };
+        PageSetup.prototype.devicePixelRatioChanged = function () {
+            console.log("devicePixelRatio changed: " + window.devicePixelRatio);
+            this.listenOnDevicePixelRatio();
         };
         PageSetup.prototype._dataChange = function (id) {
             var opt = undefined;

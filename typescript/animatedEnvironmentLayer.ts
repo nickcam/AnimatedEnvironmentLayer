@@ -184,10 +184,11 @@ class AnimatedEnvironmentLayerView2D extends BaseLayerView2D {
             if (!this.context) return;
 
             // resize the canvas
-            this.context.canvas.width = this.view.width;
-            this.context.canvas.height = this.view.height;
+            this.setCanvasSize();
         });
 
+
+        this.listenOnDevicePixelRatio();
 
         watchUtils.watch(this.layer, "visible", (nv, olv, pn, ta) => {
             if (!nv) {
@@ -200,6 +201,16 @@ class AnimatedEnvironmentLayerView2D extends BaseLayerView2D {
 
     }
 
+    private listenOnDevicePixelRatio() {
+          let mediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+          mediaQuery.addEventListener("change", () =>  {  this.devicePixelRatioChanged(); }, { once: true });
+    }
+
+    private devicePixelRatioChanged() {
+        this.stopDraw();
+        this.startDraw();
+        this.listenOnDevicePixelRatio();
+    }
 
     render(renderParameters) {
 
@@ -329,8 +340,7 @@ class AnimatedEnvironmentLayerView2D extends BaseLayerView2D {
         this.southWest = new Point({ x: extent.xmin, y: extent.ymin });
 
         // resize the canvas
-        this.context.canvas.width = this.view.width;
-        this.context.canvas.height = this.view.height;
+        this.setCanvasSize();
 
         // cater for the extent crossing the IDL
         if (this.southWest.x > this.northEast.x && this.northEast.x < 0) {
@@ -339,6 +349,16 @@ class AnimatedEnvironmentLayerView2D extends BaseLayerView2D {
 
     }
 
+
+    private setCanvasSize() {
+        this.context.canvas.style.width = `${this.view.width}px`;
+        this.context.canvas.style.height = `${this.view.height}px`;
+
+        let dpr = window.devicePixelRatio;
+        this.context.canvas.width = Math.floor(this.view.width * dpr);
+        this.context.canvas.height = Math.floor(this.view.height * dpr);
+    }
+    
 
     private setParticleDensity() {
         if (!Array.isArray(this.layer.displayOptions.particleDensity)) {

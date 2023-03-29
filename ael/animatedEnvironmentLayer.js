@@ -46,9 +46,9 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
                 if (!_this.context)
                     return;
                 // resize the canvas
-                _this.context.canvas.width = _this.view.width;
-                _this.context.canvas.height = _this.view.height;
+                _this.setCanvasSize();
             });
+            _this.listenOnDevicePixelRatio();
             watchUtils.watch(_this.layer, "visible", function (nv, olv, pn, ta) {
                 if (!nv) {
                     _this.clear();
@@ -59,6 +59,16 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             });
             return _this;
         }
+        AnimatedEnvironmentLayerView2D.prototype.listenOnDevicePixelRatio = function () {
+            var _this = this;
+            var mediaQuery = window.matchMedia("(resolution: " + window.devicePixelRatio + "dppx)");
+            mediaQuery.addEventListener("change", function () { _this.devicePixelRatioChanged(); }, { once: true });
+        };
+        AnimatedEnvironmentLayerView2D.prototype.devicePixelRatioChanged = function () {
+            this.stopDraw();
+            this.startDraw();
+            this.listenOnDevicePixelRatio();
+        };
         AnimatedEnvironmentLayerView2D.prototype.render = function (renderParameters) {
             this.viewState = renderParameters.state;
             if (!renderParameters.stationary) {
@@ -150,12 +160,18 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             this.northEast = new Point({ x: extent.xmax, y: extent.ymax });
             this.southWest = new Point({ x: extent.xmin, y: extent.ymin });
             // resize the canvas
-            this.context.canvas.width = this.view.width;
-            this.context.canvas.height = this.view.height;
+            this.setCanvasSize();
             // cater for the extent crossing the IDL
             if (this.southWest.x > this.northEast.x && this.northEast.x < 0) {
                 this.northEast.x = 360 + this.northEast.x;
             }
+        };
+        AnimatedEnvironmentLayerView2D.prototype.setCanvasSize = function () {
+            this.context.canvas.style.width = this.view.width + "px";
+            this.context.canvas.style.height = this.view.height + "px";
+            var dpr = window.devicePixelRatio;
+            this.context.canvas.width = Math.floor(this.view.width * dpr);
+            this.context.canvas.height = Math.floor(this.view.height * dpr);
         };
         AnimatedEnvironmentLayerView2D.prototype.setParticleDensity = function () {
             if (!Array.isArray(this.layer.displayOptions.particleDensity)) {

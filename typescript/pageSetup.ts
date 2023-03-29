@@ -69,6 +69,21 @@ export class PageSetup {
             dom.byId("speed").innerHTML = rpt.velocity ? rpt.velocity.toFixed(2) : "n/a";
         });
         
+
+        //this.listenOnDevicePixelRatio();
+    }
+
+    private listenOnDevicePixelRatio() {
+        let mediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+        mediaQuery.addEventListener("change", () =>  { console.log("in change"); this.devicePixelRatioChanged(); }, { once: true });
+
+        console.log("called listenOnDevicePixelRatio");
+  }
+
+    private devicePixelRatioChanged() {
+        console.log("devicePixelRatio changed: " + window.devicePixelRatio);
+
+        this.listenOnDevicePixelRatio();
     }
 
     private _dataChange(id) {
