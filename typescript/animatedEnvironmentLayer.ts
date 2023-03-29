@@ -33,9 +33,8 @@ import * as webMercatorUtils from "esri/geometry/support/webMercatorUtils";
 import * as watchUtils from "esri/core/watchUtils";
 import * as Point from "esri/geometry/Point";
 import * as asd from "esri/core/accessorSupport/decorators";
-
-
-import BaseLayerView2D = require("esri/views/2d/layers/BaseLayerView2D");
+import * as BaseLayerView2D from "esri/views/2d/layers/BaseLayerView2D";
+import * as promiseUtils from "esri/core/promiseUtils";
 
 
 export type CustomFadeFunction = (context: CanvasRenderingContext2D, bounds: Bounds) => void;
@@ -429,7 +428,7 @@ class AnimatedEnvironmentLayerView2D extends BaseLayerView2D {
 
 
 @asd.subclass("AnimatedEnvironmentLayer")
-export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
+export class AnimatedEnvironmentLayer extends GraphicsLayer {
 
     @asd.property()
     url: string;
@@ -478,7 +477,7 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
     }
 
 
-    createLayerView(view: __esri.MapView | __esri.SceneView) {
+    createLayerView(view: __esri.MapView | __esri.SceneView): Promise<AnimatedEnvironmentLayerView2D> {
 
         // only supports 2d right now.
         if (view.type !== "2d") return;
@@ -490,8 +489,14 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
         });
 
         this.layerView.view.on("pointer-move", (evt) => this.viewPointerMove(evt));
+
+        // since Esri isn't calling attach I presume its related to the modification of this method.
+        // Description says attach called after its created and before its asked to draw content.  My assumption is
+        // that putting it between the constructor call and before the promise is resolved satisfies this criteria.
+        this.layerView.attach();
+
         this.draw(true);
-        return this.layerView;
+        return promiseUtils.create((resolve, reject) => resolve(this.layerView));
     }
 
     /**
@@ -518,7 +523,7 @@ export class AnimatedEnvironmentLayer extends asd.declared(GraphicsLayer) {
                     this.doDraw(response.data); // all sorted draw now.
                     this.dataLoading = false;
                 })
-                .otherwise((err) => {
+                .catch((err) => {
                     console.error("Error occurred retrieving data. " + err);
                     this.dataLoading = false;
                     this.isErrored = true;

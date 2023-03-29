@@ -33,7 +33,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
-define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri/geometry/support/webMercatorUtils", "esri/core/watchUtils", "esri/geometry/Point", "esri/core/accessorSupport/decorators", "esri/views/2d/layers/BaseLayerView2D"], function (require, exports, GraphicsLayer, esriRequest, webMercatorUtils, watchUtils, Point, asd, BaseLayerView2D) {
+define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri/geometry/support/webMercatorUtils", "esri/core/watchUtils", "esri/geometry/Point", "esri/core/accessorSupport/decorators", "esri/views/2d/layers/BaseLayerView2D", "esri/core/promiseUtils"], function (require, exports, GraphicsLayer, esriRequest, webMercatorUtils, watchUtils, Point, asd, BaseLayerView2D, promiseUtils) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var AnimatedEnvironmentLayerView2D = /** @class */ (function (_super) {
@@ -256,8 +256,12 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
                 layer: this
             });
             this.layerView.view.on("pointer-move", function (evt) { return _this.viewPointerMove(evt); });
+            // since Esri isn't calling attach I presume its related to the modification of this method.
+            // Description says its called after its created and before its asked to draw content.  My assumption that putting
+            // it between the constructor call and before the promise is resolved satisfies this criteria.
+            this.layerView.attach();
             this.draw(true);
-            return this.layerView;
+            return promiseUtils.create(function (resolve, reject) { return resolve(_this.layerView); });
         };
         /**
          * Start a draw
@@ -281,7 +285,7 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
                     _this.doDraw(response.data); // all sorted draw now.
                     _this.dataLoading = false;
                 })
-                    .otherwise(function (err) {
+                    .catch(function (err) {
                     console.error("Error occurred retrieving data. " + err);
                     _this.dataLoading = false;
                     _this.isErrored = true;
@@ -415,7 +419,7 @@ define(["require", "exports", "esri/layers/GraphicsLayer", "esri/request", "esri
             __metadata("design:paramtypes", [Object])
         ], AnimatedEnvironmentLayer);
         return AnimatedEnvironmentLayer;
-    }(asd.declared(GraphicsLayer)));
+    }(GraphicsLayer));
     exports.AnimatedEnvironmentLayer = AnimatedEnvironmentLayer;
     /*  Global class for simulating the movement of particle through grid
      credit: All the credit for this work goes to: https://github.com/cambecc for creating the repo:
