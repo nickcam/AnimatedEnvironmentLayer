@@ -1,6 +1,6 @@
 # AnimatedEnvironmentLayer
 
-Supports arcgis-js-api v4.12.
+Supports arcgis-js-api v4.21.
 See the branches for code that supoprts older api versions.
 
 An arcgis js api layer that can display data from GRIB2 files as animated particles.
